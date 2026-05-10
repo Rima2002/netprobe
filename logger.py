@@ -17,6 +17,7 @@ FIELDNAMES = [
     "attempt",
     "payload_bytes",
     "rtt",
+    "integrity_ok",
     "details",
 ]
 
@@ -40,6 +41,7 @@ class EventLogger:
         attempt: int | str = "",
         payload_bytes: int | str = "",
         rtt: float | str = "",
+        integrity_ok: bool | str = "",
         details: str = "",
     ) -> None:
         row = {
@@ -50,6 +52,7 @@ class EventLogger:
             "attempt": attempt,
             "payload_bytes": payload_bytes,
             "rtt": rtt,
+            "integrity_ok": integrity_ok,
             "details": details,
         }
         self.events.append(row)

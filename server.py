@@ -73,8 +73,10 @@ def send_ack(
     logger: EventLogger,
     ack_loss_rate: float,
     ack_for: str,
+    extra_details: dict[str, str | bool | int | float] | None = None,
 ) -> None:
     ack_name = TYPE_NAMES.get(ack_type, str(ack_type))
+    extra_details = extra_details or {}
     if should_drop(ack_loss_rate):
         logger.log(
             event="simulated_ack_loss",
@@ -84,8 +86,21 @@ def send_ack(
         )
         return
 
-    sock.sendto(make_packet(ack_type, sequence_number, total_packets, ack_for.encode("ascii")), address)
-    logger.log(event="ack_sent", packet_type=ack_name, sequence_number=sequence_number, details=f"ack_for={ack_for}")
+    payload_parts = [ack_for]
+    payload_parts.extend(f"{key}={value}" for key, value in extra_details.items())
+    payload = ";".join(payload_parts).encode("ascii")
+    details = f"ack_for={ack_for}"
+    if extra_details:
+        details = "; ".join([details, *(f"{key}={value}" for key, value in extra_details.items())])
+
+    sock.sendto(make_packet(ack_type, sequence_number, total_packets, payload), address)
+    logger.log(
+        event="ack_sent",
+        packet_type=ack_name,
+        sequence_number=sequence_number,
+        integrity_ok=extra_details.get("integrity_ok", ""),
+        details=details,
+    )
 
 
 def safe_received_path(output_dir: str, filename: str) -> str:
@@ -260,6 +275,7 @@ def run_server(
                     packet_type=packet_name,
                     sequence_number=packet.sequence_number,
                     payload_bytes=session.expected_size,
+                    integrity_ok=hash_ok,
                     details=(
                         f"path={output_path}; expected_hash={session.expected_hash}; "
                         f"actual_hash={actual_hash}; integrity_ok={hash_ok}; "
@@ -268,7 +284,21 @@ def run_server(
                         f"total_transfer_time={elapsed:.6f}"
                     ),
                 )
-                send_ack(sock, client_address, TYPE_FIN_ACK, packet.sequence_number, packet.total_packets, logger, ack_loss_rate, "FIN")
+                send_ack(
+                    sock,
+                    client_address,
+                    TYPE_FIN_ACK,
+                    packet.sequence_number,
+                    packet.total_packets,
+                    logger,
+                    ack_loss_rate,
+                    "FIN",
+                    {
+                        "integrity_ok": str(hash_ok).lower(),
+                        "expected_hash": session.expected_hash,
+                        "actual_hash": actual_hash,
+                    },
+                )
                 completed_fin_sequences[client_address] = (packet.sequence_number, packet.total_packets)
                 del sessions[client_address]
                 if once:

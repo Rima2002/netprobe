@@ -73,8 +73,8 @@ def wait_for_ack(
     expected_type: int,
     expected_sequence: int,
     expected_payload: bytes,
-) -> float | None:
-    """Wait for a valid ACK and return RTT timestamp base time handled by caller."""
+) -> tuple[float, str]:
+    """Wait for a valid ACK and return receive time plus ACK payload text."""
 
     while True:
         raw_ack, _ = sock.recvfrom(HEADER_SIZE + 1024)
@@ -83,12 +83,21 @@ def wait_for_ack(
         if not verify_packet(ack):
             continue
 
-        if (
-            ack.packet_type == expected_type
-            and ack.sequence_number == expected_sequence
-            and ack.payload == expected_payload
-        ):
-            return time.time()
+        ack_text = ack.payload.decode("ascii", errors="replace")
+        ack_for = ack_text.split(";", 1)[0].encode("ascii")
+
+        if ack.packet_type == expected_type and ack.sequence_number == expected_sequence and ack_for == expected_payload:
+            return time.time(), ack_text
+
+
+def parse_ack_details(ack_text: str) -> dict[str, str]:
+    details: dict[str, str] = {}
+    for part in ack_text.split(";"):
+        if "=" not in part:
+            continue
+        key, value = part.split("=", 1)
+        details[key.strip()] = value.strip()
+    return details
 
 
 def send_with_stop_and_wait(
@@ -103,7 +112,7 @@ def send_with_stop_and_wait(
     max_retries: int,
     loss_rate: float,
     logger: EventLogger,
-) -> tuple[bool, int, float | None]:
+) -> tuple[bool, int, float | None, dict[str, str]]:
     """Send one packet until its ACK arrives or retry budget is exhausted.
 
     Stop-and-Wait means exactly one unacknowledged packet exists at a time.
@@ -141,9 +150,10 @@ def send_with_stop_and_wait(
             )
 
         try:
-            ack_time = wait_for_ack(sock, expected_ack_type, sequence_number, packet_name.encode("ascii"))
+            ack_time, ack_text = wait_for_ack(sock, expected_ack_type, sequence_number, packet_name.encode("ascii"))
             rtt = ack_time - send_time if ack_time is not None else None
             ack_for = packet_name
+            ack_details = parse_ack_details(ack_text)
             logger.log(
                 event="ack_received",
                 packet_type=ack_name,
@@ -151,9 +161,10 @@ def send_with_stop_and_wait(
                 attempt=attempts,
                 payload_bytes=0,
                 rtt=rtt if rtt is not None else "",
-                details=f"ack_for={ack_for}; ack_receive_time={ack_time}",
+                integrity_ok=ack_details.get("integrity_ok", ""),
+                details=f"ack_for={ack_for}; ack_receive_time={ack_time}; raw_ack_payload={ack_text}",
             )
-            return True, attempts - 1, rtt
+            return True, attempts - 1, rtt, ack_details
         except socket.timeout:
             logger.log(
                 event="timeout",
@@ -189,7 +200,7 @@ def send_with_stop_and_wait(
         payload_bytes=len(payload),
         details=f"Exceeded maximum retransmission count: {max_retries}",
     )
-    return False, attempts - 1, None
+    return False, attempts - 1, None, {}
 
 
 def send_file(
@@ -231,7 +242,7 @@ def send_file(
     )
 
     try:
-        ok, retransmissions, _ = send_with_stop_and_wait(
+        ok, retransmissions, _, _ = send_with_stop_and_wait(
             sock,
             server_address,
             TYPE_START,
@@ -250,7 +261,7 @@ def send_file(
             return False
 
         for sequence_number, chunk in enumerate(chunks):
-            ok, retransmissions, _ = send_with_stop_and_wait(
+            ok, retransmissions, _, _ = send_with_stop_and_wait(
                 sock,
                 server_address,
                 TYPE_DATA,
@@ -270,7 +281,7 @@ def send_file(
             successful_packets += 1
 
         fin_payload = file_hash.encode("ascii")
-        ok, retransmissions, _ = send_with_stop_and_wait(
+        ok, retransmissions, _, fin_ack_details = send_with_stop_and_wait(
             sock,
             server_address,
             TYPE_FIN,
@@ -289,9 +300,13 @@ def send_file(
             return False
 
         completion_time = time.time() - start_time
+        integrity_ok = fin_ack_details.get("integrity_ok", "UNKNOWN")
+        expected_hash = fin_ack_details.get("expected_hash", file_hash)
+        actual_hash = fin_ack_details.get("actual_hash", "UNKNOWN")
         logger.log(
             event="transfer_completed",
             payload_bytes=file_size,
+            integrity_ok=integrity_ok,
             details=(
                 f"successful_packet_count={successful_packets}; "
                 f"failed_packet_count={failed_packets}; "
@@ -299,7 +314,10 @@ def send_file(
                 f"original_file_size={file_size}; "
                 f"transferred_bytes={file_size}; "
                 f"total_transfer_time={completion_time:.6f}; "
-                f"sha256={file_hash}"
+                f"sha256={file_hash}; "
+                f"expected_hash={expected_hash}; "
+                f"actual_hash={actual_hash}; "
+                f"integrity_ok={integrity_ok}"
             ),
         )
         return True

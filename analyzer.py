@@ -42,8 +42,13 @@ def parse_details(details: str) -> dict[str, str]:
     return parsed
 
 
-def as_bool(value: Any) -> bool:
-    return str(value).strip().lower() in {"true", "1", "yes", "ok"}
+def parse_integrity(value: Any) -> bool | None:
+    normalized = str(value).strip().lower()
+    if normalized in {"true", "1", "yes", "ok", "passed"}:
+        return True
+    if normalized in {"false", "0", "no", "failed"}:
+        return False
+    return None
 
 
 def analyze_log(log_path: str) -> dict[str, float | int | str]:
@@ -103,11 +108,24 @@ def analyze_log(log_path: str) -> dict[str, float | int | str]:
     ]
 
     duplicate_count = len(duplicate_events)
-    integrity_ok = ""
+    integrity_ok: bool | str = "UNKNOWN"
     if reconstruction_events:
         reconstruction_details = parse_details(reconstruction_events[-1].get("details", ""))
         duplicate_count = int(as_float(reconstruction_details.get("duplicate_count"), duplicate_count))
-        integrity_ok = str(as_bool(reconstruction_details.get("integrity_ok")))
+        parsed_integrity = parse_integrity(
+            reconstruction_events[-1].get("integrity_ok") or reconstruction_details.get("integrity_ok")
+        )
+        if parsed_integrity is not None:
+            integrity_ok = parsed_integrity
+
+    if integrity_ok == "UNKNOWN":
+        for row in reversed(events):
+            parsed_integrity = parse_integrity(row.get("integrity_ok"))
+            if parsed_integrity is None:
+                parsed_integrity = parse_integrity(parse_details(row.get("details", "")).get("integrity_ok"))
+            if parsed_integrity is not None:
+                integrity_ok = parsed_integrity
+                break
 
     throughput = transferred_bytes / completion_time if completion_time > 0 else 0.0
     goodput = original_file_bytes / completion_time if completion_time > 0 else 0.0
