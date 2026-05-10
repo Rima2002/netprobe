@@ -1,0 +1,14 @@
+"""Default configuration values for NetProbe."""
+
+DEFAULT_SERVER_IP = "127.0.0.1"
+DEFAULT_SERVER_PORT = 5005
+DEFAULT_PACKET_SIZE = 1024
+DEFAULT_TIMEOUT = 1.0
+DEFAULT_LOSS_RATE = 0.0
+DEFAULT_MAX_RETRIES = 5
+
+TEST_FILES_DIR = "test_files"
+RECEIVED_FILES_DIR = "received_files"
+LOGS_DIR = "logs"
+RESULTS_DIR = "results"
+
