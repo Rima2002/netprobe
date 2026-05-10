@@ -22,8 +22,8 @@ except ImportError:
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
-def ensure_test_file(path: str, size_kb: int = 256) -> None:
-    if os.path.exists(path):
+def ensure_test_file(path: str, size_kb: int = 64) -> None:
+    if os.path.exists(path) and os.path.getsize(path) >= size_kb * 1024:
         return
 
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -198,7 +198,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run NetProbe performance experiments")
     parser.add_argument(
         "--file",
-        default=os.path.join(BASE_DIR, TEST_FILES_DIR, "sample.txt"),
+        default=os.path.join(BASE_DIR, TEST_FILES_DIR, "experiment_sample.bin"),
         help="File used for all experiment transfers",
     )
     parser.add_argument("--port", type=int, default=6100)
@@ -225,4 +225,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
