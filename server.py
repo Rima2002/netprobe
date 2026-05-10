@@ -119,13 +119,25 @@ def run_server(
     sock.bind((host, port))
     sessions: dict[tuple[str, int], TransferSession] = {}
     completed_fin_sequences: dict[tuple[str, int], tuple[int, int]] = {}
+    shutdown_deadline: float | None = None
 
     print(f"NetProbe server listening on {host}:{port}")
     logger.log(event="server_started", details=f"host={host}; port={port}; ack_loss_rate={ack_loss_rate}")
 
     try:
         while True:
-            raw_packet, client_address = sock.recvfrom(HEADER_SIZE + 65507)
+            if shutdown_deadline is not None:
+                remaining = shutdown_deadline - time.time()
+                if remaining <= 0:
+                    return
+                sock.settimeout(min(0.2, remaining))
+            else:
+                sock.settimeout(None)
+
+            try:
+                raw_packet, client_address = sock.recvfrom(HEADER_SIZE + 65507)
+            except socket.timeout:
+                continue
 
             try:
                 packet = parse_packet(raw_packet)
@@ -203,6 +215,10 @@ def run_server(
                         packet_type=packet_name,
                         sequence_number=packet.sequence_number,
                         payload_bytes=packet.payload_length,
+                        details=(
+                            "Duplicate DATA packet was not stored again; "
+                            f"duplicate_count={session.duplicate_count}"
+                        ),
                     )
                 elif packet.sequence_number >= session.total_packets:
                     logger.log(
@@ -246,16 +262,20 @@ def run_server(
                     payload_bytes=session.expected_size,
                     details=(
                         f"path={output_path}; expected_hash={session.expected_hash}; "
-                        f"actual_hash={actual_hash}; hash_ok={hash_ok}; "
-                        f"duplicates={session.duplicate_count}; corrupted={session.corrupted_count}; "
-                        f"elapsed={elapsed:.6f}"
+                        f"actual_hash={actual_hash}; integrity_ok={hash_ok}; "
+                        f"duplicate_count={session.duplicate_count}; corrupted_count={session.corrupted_count}; "
+                        f"original_file_size={session.expected_size}; transferred_bytes={session.expected_size}; "
+                        f"total_transfer_time={elapsed:.6f}"
                     ),
                 )
                 send_ack(sock, client_address, TYPE_FIN_ACK, packet.sequence_number, packet.total_packets, logger, ack_loss_rate, "FIN")
                 completed_fin_sequences[client_address] = (packet.sequence_number, packet.total_packets)
                 del sessions[client_address]
                 if once:
-                    return
+                    # Stay alive briefly so a client can retransmit FIN if the
+                    # first FIN_ACK was lost, making duplicate FIN handling real.
+                    shutdown_deadline = time.time() + 2.0
+                    continue
     finally:
         csv_path, json_path = logger.save()
         sock.close()

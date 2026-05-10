@@ -20,23 +20,38 @@ except ImportError:
 
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+TEST_FILE_SPECS = {
+    "small": ("small.bin", 64 * 1024),
+    "medium": ("medium.bin", 1024 * 1024),
+    "large": ("large.bin", 10 * 1024 * 1024),
+}
 
 
-def ensure_test_file(path: str, size_kb: int = 64) -> None:
-    if os.path.exists(path) and os.path.getsize(path) >= size_kb * 1024:
+def ensure_test_file(path: str, size_bytes: int) -> None:
+    if os.path.exists(path) and os.path.getsize(path) >= size_bytes:
         return
 
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    pattern = b"NetProbe reliable UDP transfer experiment data.\n"
+    pattern = (f"NetProbe deterministic test data for {os.path.basename(path)}.\n").encode("utf-8")
     with open(path, "wb") as file_obj:
-        while file_obj.tell() < size_kb * 1024:
-            file_obj.write(pattern)
+        while file_obj.tell() < size_bytes:
+            remaining = size_bytes - file_obj.tell()
+            file_obj.write(pattern[:remaining])
 
 
-def latest_client_log(log_dir: str, before: set[str]) -> str:
-    candidates = set(glob.glob(os.path.join(log_dir, "client_transfer_*.csv"))) - before
+def ensure_standard_test_files(test_dir: str) -> dict[str, str]:
+    paths: dict[str, str] = {}
+    for key, (filename, size_bytes) in TEST_FILE_SPECS.items():
+        path = os.path.join(test_dir, filename)
+        ensure_test_file(path, size_bytes)
+        paths[key] = path
+    return paths
+
+
+def latest_log(log_dir: str, prefix: str, before: set[str]) -> str:
+    candidates = set(glob.glob(os.path.join(log_dir, f"{prefix}_*.csv"))) - before
     if not candidates:
-        raise FileNotFoundError("No new client log was created")
+        raise FileNotFoundError(f"No new {prefix} log was created")
     return max(candidates, key=os.path.getmtime)
 
 
@@ -49,10 +64,11 @@ def run_one_transfer(
     max_retries: int,
     log_dir: str,
     output_dir: str,
-) -> str:
+) -> tuple[str, str]:
     os.makedirs(log_dir, exist_ok=True)
     os.makedirs(output_dir, exist_ok=True)
     before_logs = set(glob.glob(os.path.join(log_dir, "client_transfer_*.csv")))
+    before_server_logs = set(glob.glob(os.path.join(log_dir, "server_transfer_*.csv")))
 
     server_cmd = [
         sys.executable,
@@ -122,7 +138,9 @@ def run_one_transfer(
             server_process.terminate()
             server_process.wait(timeout=5)
 
-    return latest_client_log(log_dir, before_logs)
+    client_log = latest_log(log_dir, "client_transfer", before_logs)
+    server_log = latest_log(log_dir, "server_transfer", before_server_logs)
+    return client_log, server_log
 
 
 def run_experiments(
@@ -132,16 +150,20 @@ def run_experiments(
     log_dir: str,
     output_dir: str,
 ) -> tuple[str, list[str]]:
-    ensure_test_file(file_path)
+    generated_files = ensure_standard_test_files(os.path.join(BASE_DIR, TEST_FILES_DIR))
+    if file_path:
+        ensure_test_file(file_path, TEST_FILE_SPECS["medium"][1])
+        generated_files["custom"] = file_path
 
     scenarios: list[dict[str, Any]] = []
     for packet_size in [512, 1024, 2048]:
         scenarios.append(
             {
                 "scenario": "packet_size",
+                "file_path": generated_files["medium"],
                 "packet_size": packet_size,
                 "timeout": 1.0,
-                "loss_rate": 0.05,
+                "loss_rate": 0.0,
             }
         )
 
@@ -149,9 +171,10 @@ def run_experiments(
         scenarios.append(
             {
                 "scenario": "timeout",
+                "file_path": generated_files["small"],
                 "packet_size": 1024,
                 "timeout": timeout,
-                "loss_rate": 0.05,
+                "loss_rate": 0.1,
             }
         )
 
@@ -159,8 +182,9 @@ def run_experiments(
         scenarios.append(
             {
                 "scenario": "loss_rate",
+                "file_path": generated_files["small"],
                 "packet_size": 1024,
-                "timeout": 1.0,
+                "timeout": 0.2,
                 "loss_rate": loss_rate,
             }
         )
@@ -169,8 +193,8 @@ def run_experiments(
     current_port = port
     for index, scenario in enumerate(scenarios, start=1):
         print(f"Running experiment {index}/{len(scenarios)}: {scenario}")
-        log_path = run_one_transfer(
-            file_path=file_path,
+        client_log, server_log = run_one_transfer(
+            file_path=str(scenario["file_path"]),
             port=current_port,
             packet_size=int(scenario["packet_size"]),
             timeout=float(scenario["timeout"]),
@@ -179,14 +203,52 @@ def run_experiments(
             log_dir=log_dir,
             output_dir=output_dir,
         )
-        metrics = analyze_log(log_path)
-        results.append({**scenario, **metrics})
+        client_metrics = analyze_log(client_log)
+        server_metrics = analyze_log(server_log)
+        results.append(
+            {
+                "scenario": scenario["scenario"],
+                "packet_size": scenario["packet_size"],
+                "timeout": scenario["timeout"],
+                "loss_rate": scenario["loss_rate"],
+                "file_size": client_metrics["file_size"],
+                "throughput": client_metrics["throughput"],
+                "goodput": client_metrics["goodput"],
+                "completion_time": client_metrics["completion_time"],
+                "retransmission_count": client_metrics["retransmission_count"],
+                "retransmission_rate": client_metrics["retransmission_rate"],
+                "packet_loss_rate": client_metrics["packet_loss_rate"],
+                "average_rtt": client_metrics["average_rtt"],
+                "duplicate_count": server_metrics["duplicate_count"],
+                "integrity_ok": server_metrics["integrity_ok"],
+                "client_log": client_log,
+                "server_log": server_log,
+            }
+        )
         current_port += 1
 
     os.makedirs(output_dir, exist_ok=True)
     results_csv = os.path.join(output_dir, "experiment_results.csv")
+    fieldnames = [
+        "scenario",
+        "packet_size",
+        "timeout",
+        "loss_rate",
+        "file_size",
+        "throughput",
+        "goodput",
+        "completion_time",
+        "retransmission_count",
+        "retransmission_rate",
+        "packet_loss_rate",
+        "average_rtt",
+        "duplicate_count",
+        "integrity_ok",
+        "client_log",
+        "server_log",
+    ]
     with open(results_csv, "w", newline="", encoding="utf-8") as csv_file:
-        writer = csv.DictWriter(csv_file, fieldnames=list(results[0].keys()))
+        writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(results)
 
@@ -198,8 +260,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run NetProbe performance experiments")
     parser.add_argument(
         "--file",
-        default=os.path.join(BASE_DIR, TEST_FILES_DIR, "experiment_sample.bin"),
-        help="File used for all experiment transfers",
+        default="",
+        help="Optional custom file to generate/use for experiments; defaults use small.bin and medium.bin",
     )
     parser.add_argument("--port", type=int, default=6100)
     parser.add_argument("--max-retries", type=int, default=max(DEFAULT_MAX_RETRIES, 8))

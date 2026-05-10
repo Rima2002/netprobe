@@ -1,192 +1,159 @@
 # NetProbe
 
-NetProbe is a UDP-based reliable file transfer, traffic monitoring, and network performance analysis platform written in Python. It does not use a ready-made file transfer library. Reliability is implemented manually at the application layer with Stop-and-Wait ARQ.
+NetProbe is a UDP-based reliable file transfer, traffic monitoring, and network performance analysis platform. It uses raw Python UDP sockets and implements reliability manually at the application layer with Stop-and-Wait ARQ.
 
-Repository owner target: `https://github.com/Rima2002`
+GitHub: `https://github.com/Rima2002/netprobe`
 
 ## Project Structure
 
 ```text
 netprobe/
-  client.py          UDP client, chunk sender, ACK wait, timeout, retransmission
-  server.py          UDP server, checksum validation, duplicate filtering, reconstruction
-  protocol.py        Packet format, encoding/decoding, checksum, SHA-256 helpers
-  logger.py          CSV and JSON event logger
-  analyzer.py        Metric calculation and graph generation
-  experiments.py     Automated local experiment runner
-  config.py          Default configuration values
-  README.md
+  client.py
+  server.py
+  protocol.py
+  logger.py
+  analyzer.py
+  experiments.py
+  config.py
   requirements.txt
-  test_files/        Input files for transfers and experiments
-  received_files/    Files reconstructed by the server
-  logs/              Client/server CSV and JSON logs
-  results/           Analysis summaries and graphs
+  test_files/
+  received_files/
+  logs/
+  results/
 ```
 
 ## Dependencies
 
-Python 3.10+ is recommended.
+Install dependencies from the `netprobe` folder:
 
-Install the graph and analysis dependencies:
-
-```bash
-pip install -r requirements.txt
+```cmd
+python -m pip install -r requirements.txt
 ```
 
-On Windows, if `python` opens the Microsoft Store instead of running Python, install Python from `python.org` or disable the Windows App Execution Alias for `python.exe`.
+If `python` is not on PATH in Windows cmd, use:
 
-The transfer protocol itself uses direct UDP socket programming plus standard helper modules such as `socket`, `time`, `struct`, `hashlib`, `argparse`, `random`, `csv`, and `json`.
-
-## Packet Format
-
-Every UDP packet contains:
-
-```text
-packet type | sequence number | total packet count | payload length | checksum | payload
+```cmd
+"%LOCALAPPDATA%\Programs\Python\Python312\python.exe" -m pip install -r requirements.txt
 ```
-
-The header is packed with Python `struct` using this format:
-
-```text
-!BIIH32s
-```
-
-The checksum is a SHA-256 digest of the packet payload. The final reconstructed file is also verified with SHA-256.
 
 ## Reliability Mechanism
 
-NetProbe uses Stop-and-Wait ARQ:
+NetProbe sends a file as numbered UDP chunks. Each DATA packet contains a packet type, sequence number, total packet count, payload length, checksum, and payload.
 
-1. The client sends one packet.
-2. The client waits for the matching ACK.
-3. If the ACK arrives before timeout, the client sends the next packet.
-4. If timeout occurs, the client retransmits the same packet.
-5. By default, one packet can be retransmitted up to 5 times.
-6. The server ignores duplicate DATA packets but sends ACK again, because the original ACK may have been lost.
-7. The server stores chunks by sequence number and reconstructs the file in correct order after receiving `FIN`.
+The client sends one packet and waits for the matching ACK before sending the next packet. If no ACK arrives before the timeout, the same sequence number is retransmitted. After the retry limit is exceeded, the transfer fails.
 
-The code is organized so a Sliding Window design can be added later by replacing the client send loop while keeping the protocol and logging modules.
+The server verifies each packet checksum, stores each valid DATA chunk by sequence number, ignores duplicate DATA packets, and resends the correct ACK for duplicates. At the end, the server reconstructs the file in order and verifies the final SHA-256 hash.
 
-## Run The Server
+## Run Server
 
-From the `netprobe/` directory:
+Terminal 1:
 
-```bash
-python server.py --host 0.0.0.0 --port 5005
-```
-
-For one transfer only:
-
-```bash
+```cmd
+cd "C:\Users\Rima Farah Eleuch\OneDrive\Desktop\SPRING SEMESTER 2026\BilgisayarAglari_1\Proje\netprobe"
 python server.py --host 127.0.0.1 --port 5005 --once
 ```
 
-From the parent directory:
+With explicit Python path:
 
-```bash
-python -m netprobe.server --host 0.0.0.0 --port 5005
+```cmd
+"%LOCALAPPDATA%\Programs\Python\Python312\python.exe" server.py --host 127.0.0.1 --port 5005 --once
 ```
 
-## Run The Client
+To make duplicate-packet handling visible, intentionally lose some ACKs:
 
-Open another terminal and run:
-
-```bash
-python client.py --server-ip 127.0.0.1 --server-port 5005 --file test_files/sample.txt
+```cmd
+python server.py --host 127.0.0.1 --port 5005 --once --ack-loss-rate 0.2
 ```
 
-With configurable transfer parameters in PowerShell:
+## Run Client
 
-```powershell
-python client.py ^
-  --server-ip 127.0.0.1 ^
-  --server-port 5005 ^
-  --file test_files/sample.txt ^
-  --packet-size 1024 ^
-  --timeout 1.0 ^
-  --loss-rate 0.1 ^
-  --max-retries 5
+Terminal 2:
+
+```cmd
+cd "C:\Users\Rima Farah Eleuch\OneDrive\Desktop\SPRING SEMESTER 2026\BilgisayarAglari_1\Proje\netprobe"
+python client.py --server-ip 127.0.0.1 --server-port 5005 --file test_files\medium.bin
 ```
 
-PowerShell single-line version:
+With configurable values:
 
-```powershell
-python client.py --server-ip 127.0.0.1 --server-port 5005 --file test_files/sample.txt --packet-size 1024 --timeout 1.0 --loss-rate 0.1 --max-retries 5
+```cmd
+python client.py --server-ip 127.0.0.1 --server-port 5005 --file test_files\medium.bin --packet-size 1024 --timeout 1.0 --loss-rate 0.1 --max-retries 5
 ```
 
-## Logs
+## Verify SHA-256
 
-Each run saves CSV and JSON logs in `logs/`.
+After a transfer:
 
-Logged events include:
-
-- packet send time
-- ACK receive time
-- timeout events
-- retransmissions
-- successful packet count
-- failed packet count
-- total transfer time
-- checksum and file integrity details
-
-## Analyze One Transfer
-
-Use the client CSV log:
-
-```bash
-python analyzer.py --log logs/client_transfer_YYYYMMDD_HHMMSS.csv
+```cmd
+certutil -hashfile test_files\medium.bin SHA256
+certutil -hashfile received_files\medium.bin SHA256
 ```
 
-This calculates:
+The two hashes must match.
 
-- throughput
-- goodput
-- packet loss rate
-- retransmission count
-- retransmission rate
-- average RTT
-- completion time
+## Analyze Logs
 
-Summaries are written to `results/analysis_summary.csv` and `results/analysis_summary.json`.
+Use the newest client log from `logs/`:
+
+```cmd
+dir logs
+python analyzer.py --log logs\client_transfer_YYYYMMDD_HHMMSS_mmm.csv
+```
+
+The analyzer saves:
+
+```text
+results/analysis_summary.csv
+results/analysis_summary.json
+```
+
+Metrics include throughput, goodput, packet loss rate, retransmission count, retransmission rate, average RTT, completion time, duplicate count when analyzing server logs, transferred bytes, original file size, and integrity status when available.
 
 ## Run Experiments
 
-The experiment runner starts a local server and client automatically for each scenario:
+The experiment script generates stronger files automatically:
 
-```bash
+```text
+test_files/small.bin   >= 10 KB
+test_files/medium.bin  >= 1 MB
+test_files/large.bin   >= 10 MB
+```
+
+Run:
+
+```cmd
 python experiments.py
 ```
 
-It tests:
-
-- different packet sizes: `512`, `1024`, `2048`
-- different timeout values: `0.2`, `0.5`, `1.0`
-- different artificial loss rates: `0.0`, `0.1`, `0.2`
-
-Outputs:
+It writes:
 
 ```text
 results/experiment_results.csv
-results/packet_size_results.png
-results/timeout_results.png
-results/loss_rate_results.png
 ```
 
-## Generate Graphs From Existing Experiment Results
+The CSV includes:
 
-```bash
-python analyzer.py --results-csv results/experiment_results.csv
+```text
+scenario, packet_size, timeout, loss_rate, file_size, throughput, goodput,
+completion_time, retransmission_count, retransmission_rate, packet_loss_rate,
+average_rtt, duplicate_count, integrity_ok
 ```
 
-## Example GitHub Upload Flow
+Graphs generated:
 
-From the directory that contains `netprobe/`:
-
-```bash
-git init
-git add netprobe
-git commit -m "Add NetProbe UDP reliable file transfer project"
-git branch -M main
-git remote add origin https://github.com/Rima2002/netprobe.git
-git push -u origin main
+```text
+results/packet_size_throughput_goodput.png
+results/packet_size_completion_time.png
+results/timeout_retransmission_count.png
+results/timeout_completion_time.png
+results/loss_rate_throughput_goodput.png
+results/loss_rate_retransmission_rate.png
 ```
+
+## Compliance Notes
+
+- No ready-made file transfer library is used.
+- UDP sockets are used directly through Python `socket`.
+- Reliability is implemented manually with sequence numbers, ACKs, timeout, retransmission, duplicate detection, and SHA-256 verification.
+- Helper libraries are limited to standard modules plus `pandas` and `matplotlib` for analysis and graphs.
+

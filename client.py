@@ -127,7 +127,7 @@ def send_with_stop_and_wait(
                 sequence_number=sequence_number,
                 attempt=attempts,
                 payload_bytes=len(payload),
-                details="Client intentionally skipped socket.sendto for experiment",
+                details=f"send_time={send_time}; client_skipped_send_for_artificial_loss=True",
             )
         else:
             sock.sendto(encoded_packet, server_address)
@@ -137,6 +137,7 @@ def send_with_stop_and_wait(
                 sequence_number=sequence_number,
                 attempt=attempts,
                 payload_bytes=len(payload),
+                details=f"send_time={send_time}",
             )
 
         try:
@@ -150,7 +151,7 @@ def send_with_stop_and_wait(
                 attempt=attempts,
                 payload_bytes=0,
                 rtt=rtt if rtt is not None else "",
-                details=f"ack_for={ack_for}",
+                details=f"ack_for={ack_for}; ack_receive_time={ack_time}",
             )
             return True, attempts - 1, rtt
         except socket.timeout:
@@ -160,7 +161,16 @@ def send_with_stop_and_wait(
                 sequence_number=sequence_number,
                 attempt=attempts,
                 payload_bytes=len(payload),
-                details=f"No ACK within {timeout} seconds",
+                details=f"No ACK within {timeout} seconds; timeout_value={timeout}",
+            )
+        except ConnectionResetError as exc:
+            logger.log(
+                event="timeout",
+                packet_type=packet_name,
+                sequence_number=sequence_number,
+                attempt=attempts,
+                payload_bytes=len(payload),
+                details=f"UDP receive reset while waiting for ACK; treated as timeout; error={exc}",
             )
         except ValueError as exc:
             logger.log(
@@ -286,6 +296,8 @@ def send_file(
                 f"successful_packet_count={successful_packets}; "
                 f"failed_packet_count={failed_packets}; "
                 f"total_retransmissions={total_retransmissions}; "
+                f"original_file_size={file_size}; "
+                f"transferred_bytes={file_size}; "
                 f"total_transfer_time={completion_time:.6f}; "
                 f"sha256={file_hash}"
             ),
