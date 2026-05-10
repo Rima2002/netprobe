@@ -27,6 +27,7 @@ class EventLogger:
     def __init__(self, log_dir: str, prefix: str = "transfer") -> None:
         os.makedirs(log_dir, exist_ok=True)
         stamp = time.strftime("%Y%m%d_%H%M%S")
+        stamp = f"{stamp}_{int((time.time() % 1) * 1000):03d}"
         self.csv_path = os.path.join(log_dir, f"{prefix}_{stamp}.csv")
         self.json_path = os.path.join(log_dir, f"{prefix}_{stamp}.json")
         self.events: list[dict[str, Any]] = []
@@ -63,4 +64,3 @@ class EventLogger:
             json.dump(self.events, json_file, indent=2)
 
         return self.csv_path, self.json_path
-

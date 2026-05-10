@@ -1,11 +1,8 @@
 __pycache__/
 *.pyc
-logs/client_transfer_*.csv
-logs/client_transfer_*.json
-logs/server_transfer_*.csv
-logs/server_transfer_*.json
+logs/*
+!logs/.gitkeep
 received_files/*
 !received_files/.gitkeep
 results/*
 !results/.gitkeep
-
