@@ -1,4 +1,4 @@
-"""Analyze NetProbe transfer logs and generate performance graphs."""
+"""NetProbe aktarım loglarını analiz eder ve performans grafikleri üretir."""
 
 from __future__ import annotations
 
@@ -31,7 +31,7 @@ def as_float(value: Any, default: float = 0.0) -> float:
 
 
 def parse_details(details: str) -> dict[str, str]:
-    """Parse semicolon-separated key=value fields from log details."""
+    """Log detaylarındaki noktalı virgülle ayrılmış key=value alanlarını çözer."""
 
     parsed: dict[str, str] = {}
     for part in details.split(";"):
@@ -54,7 +54,7 @@ def parse_integrity(value: Any) -> bool | None:
 def analyze_log(log_path: str) -> dict[str, float | int | str]:
     events = read_events(log_path)
     if not events:
-        raise ValueError(f"No events found in {log_path}")
+        raise ValueError(f"{log_path} içinde olay bulunamadı")
 
     timestamps = [as_float(row["timestamp"]) for row in events if row.get("timestamp")]
     completion_time = max(timestamps) - min(timestamps) if timestamps else 0.0
@@ -185,28 +185,28 @@ def plot_experiment_results(results_csv: str, output_dir: str) -> list[str]:
         (
             "packet_size",
             "packet_size",
-            "Packet Size (bytes)",
+            "Paket Boyutu (byte)",
             ["goodput", "throughput"],
-            "Bytes / second",
-            "Packet Size vs Throughput and Goodput",
+            "Byte / saniye",
+            "Paket Boyutu - Throughput ve Goodput",
             "packet_size_results.png",
         ),
         (
             "timeout",
             "timeout",
-            "Timeout (seconds)",
+            "Timeout (saniye)",
             ["retransmission_count", "completion_time"],
-            "Count / seconds",
-            "Timeout vs Retransmission Count and Completion Time",
+            "Sayı / saniye",
+            "Timeout - Yeniden Gönderim Sayısı ve Tamamlanma Süresi",
             "timeout_results.png",
         ),
         (
             "loss_rate",
             "loss_rate",
-            "Artificial Loss Rate",
+            "Yapay Kayıp Oranı",
             ["goodput", "throughput", "retransmission_rate"],
-            "Bytes/s or rate",
-            "Loss Rate vs Goodput, Throughput and Retransmission Rate",
+            "Byte/s veya oran",
+            "Kayıp Oranı - Goodput, Throughput ve Yeniden Gönderim Oranı",
             "loss_rate_results.png",
         ),
     ]
@@ -340,9 +340,9 @@ def generate_technical_interpretation(results_csv: str, output_dir: str) -> str:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Analyze NetProbe logs")
-    parser.add_argument("--log", help="Client CSV log to analyze")
-    parser.add_argument("--results-csv", help="Experiment results CSV to graph")
+    parser = argparse.ArgumentParser(description="NetProbe loglarını analiz eder")
+    parser.add_argument("--log", help="Analiz edilecek istemci CSV logu")
+    parser.add_argument("--results-csv", help="Grafik üretilecek deney sonuçları CSV dosyası")
     parser.add_argument("--output-dir", default=RESULTS_DIR)
     return parser
 
@@ -351,23 +351,23 @@ def main() -> None:
     args = build_parser().parse_args()
 
     if not args.log and not args.results_csv:
-        raise SystemExit("Provide --log for metrics or --results-csv for graphs.")
+        raise SystemExit("Metrik için --log veya grafik için --results-csv verin.")
 
     if args.log:
         metrics = analyze_log(args.log)
         csv_path, json_path = save_metrics(metrics, args.output_dir)
         print(json.dumps(metrics, indent=2))
-        print(f"Analysis saved: {csv_path} and {json_path}")
+        print(f"Analiz kaydedildi: {csv_path} ve {json_path}")
 
     if args.results_csv:
         json_path = save_experiment_results_json(args.results_csv, args.output_dir)
         graph_paths = plot_experiment_results(args.results_csv, args.output_dir)
         interpretation_path = generate_technical_interpretation(args.results_csv, args.output_dir)
-        print(f"Experiment JSON saved: {json_path}")
-        print("Graphs generated:")
+        print(f"Deney JSON çıktısı kaydedildi: {json_path}")
+        print("Grafikler oluşturuldu:")
         for graph_path in graph_paths:
             print(f"  {graph_path}")
-        print(f"Technical interpretation saved: {interpretation_path}")
+        print(f"Teknik yorum kaydedildi: {interpretation_path}")
 
 
 if __name__ == "__main__":

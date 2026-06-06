@@ -219,7 +219,7 @@ def send_reliable_packet(
                 sequence_number=sequence_number,
                 attempt=attempt,
                 payload_bytes=len(payload),
-                details=f"No ACK within {timeout} seconds; timeout_value={timeout}",
+                details=f"{timeout} saniye içinde ACK gelmedi; timeout_value={timeout}",
             )
         except ConnectionResetError as exc:
             logger.log(
@@ -228,7 +228,7 @@ def send_reliable_packet(
                 sequence_number=sequence_number,
                 attempt=attempt,
                 payload_bytes=len(payload),
-                details=f"UDP receive reset while waiting for ACK; treated as timeout; error={exc}",
+                details=f"ACK beklenirken UDP alma işlemi sıfırlandı; timeout kabul edildi; error={exc}",
             )
         except ValueError as exc:
             logger.log(
@@ -245,7 +245,7 @@ def send_reliable_packet(
         sequence_number=sequence_number,
         attempt=max_retries + 1,
         payload_bytes=len(payload),
-        details=f"Exceeded maximum retransmission count: {max_retries}",
+        details=f"Maksimum yeniden gönderim sayısı aşıldı: {max_retries}",
     )
     return False, max_retries + 1, {}
 
@@ -473,19 +473,19 @@ def send_file(
         )
         csv_path, json_path = logger.save()
         sock.close()
-        print(f"Logs saved: {csv_path} and {json_path}")
+        print(f"Loglar kaydedildi: {csv_path} ve {json_path}")
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="NetProbe UDP Stop-and-Wait file transfer client")
+    parser = argparse.ArgumentParser(description="NetProbe UDP Stop-and-Wait dosya aktarım istemcisi")
     parser.add_argument("--server-ip", default=DEFAULT_SERVER_IP)
     parser.add_argument("--server-port", type=int, default=DEFAULT_SERVER_PORT)
-    parser.add_argument("--file", required=True, help="Path of the file to send")
+    parser.add_argument("--file", required=True, help="Gönderilecek dosyanın yolu")
     parser.add_argument("--packet-size", type=int, default=DEFAULT_PACKET_SIZE)
     parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT)
     parser.add_argument("--loss-rate", type=float, default=DEFAULT_LOSS_RATE)
     parser.add_argument("--max-retries", type=int, default=DEFAULT_MAX_RETRIES)
-    parser.add_argument("--delay-ms", type=float, default=0.0, help="Artificial delay before sending each packet")
+    parser.add_argument("--delay-ms", type=float, default=0.0, help="Her paketten önce uygulanacak yapay gecikme")
     parser.add_argument("--log-dir", default=LOGS_DIR)
     return parser
 
@@ -504,9 +504,9 @@ def main() -> None:
         delay_ms=args.delay_ms,
     )
     if success:
-        print("Transfer completed successfully.")
+        print("Aktarım başarıyla tamamlandı.")
     else:
-        raise SystemExit("Transfer failed.")
+        raise SystemExit("Aktarım başarısız oldu.")
 
 
 if __name__ == "__main__":

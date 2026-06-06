@@ -1,9 +1,9 @@
-"""Packet encoding and decoding for the NetProbe UDP protocol.
+"""NetProbe UDP protokolü için paket oluşturma ve çözme işlemleri.
 
-The project deliberately implements reliability at the application layer.
-UDP only moves datagrams; this module defines the packet fields used by the
-client and server to detect corrupted packets, acknowledge received chunks,
-and reconstruct a file in order.
+Bu projede güvenilirlik mekanizması bilinçli olarak uygulama katmanında
+kurulur. UDP yalnızca datagram taşır; bu modül bozuk paketleri tespit etmek,
+alınan parçaları ACK ile onaylamak ve dosyayı doğru sırada yeniden oluşturmak
+için kullanılan paket alanlarını tanımlar.
 """
 
 from __future__ import annotations
@@ -30,8 +30,8 @@ TYPE_NAMES = {
     TYPE_ERROR: "ERROR",
 }
 
-# packet_type: 1 byte, sequence_number: 4 bytes, total_packets: 4 bytes,
-# payload_length: 2 bytes, checksum: 32 bytes (SHA-256 digest).
+# packet_type: 1 byte, sequence_number: 4 byte, total_packets: 4 byte,
+# payload_length: 2 byte, checksum: 32 byte SHA-256 özeti.
 HEADER_FORMAT = "!BIIH32s"
 HEADER_SIZE = struct.calcsize(HEADER_FORMAT)
 MAX_UDP_PAYLOAD = 65507
@@ -48,13 +48,13 @@ class Packet:
 
 
 def checksum_payload(payload: bytes) -> bytes:
-    """Return a SHA-256 digest for one packet payload."""
+    """Bir paket payload alanı için SHA-256 özeti döndürür."""
 
     return hashlib.sha256(payload).digest()
 
 
 def file_sha256(path: str) -> str:
-    """Calculate a file's SHA-256 hash without loading it all into memory."""
+    """Dosyanın tamamını belleğe almadan SHA-256 hash değerini hesaplar."""
 
     digest = hashlib.sha256()
     with open(path, "rb") as file_obj:
@@ -69,10 +69,10 @@ def make_packet(
     total_packets: int,
     payload: bytes = b"",
 ) -> bytes:
-    """Create a binary UDP packet using the NetProbe header format."""
+    """NetProbe başlık formatını kullanarak ikili UDP paketi oluşturur."""
 
     if len(payload) > MAX_UDP_PAYLOAD - HEADER_SIZE:
-        raise ValueError("Payload is too large for a UDP datagram")
+        raise ValueError("Payload UDP datagramı için çok büyük")
 
     checksum = checksum_payload(payload)
     header = struct.pack(
@@ -87,10 +87,10 @@ def make_packet(
 
 
 def parse_packet(raw_packet: bytes) -> Packet:
-    """Parse a binary packet and validate the declared payload length."""
+    """İkili paketi çözer ve bildirilen payload uzunluğunu doğrular."""
 
     if len(raw_packet) < HEADER_SIZE:
-        raise ValueError("Packet is smaller than the protocol header")
+        raise ValueError("Paket protokol başlığından daha küçük")
 
     header = raw_packet[:HEADER_SIZE]
     payload = raw_packet[HEADER_SIZE:]
@@ -99,7 +99,7 @@ def parse_packet(raw_packet: bytes) -> Packet:
     )
 
     if payload_length != len(payload):
-        raise ValueError("Payload length in header does not match packet size")
+        raise ValueError("Başlıktaki payload uzunluğu paket boyutuyla eşleşmiyor")
 
     return Packet(
         packet_type=packet_type,
@@ -112,20 +112,20 @@ def parse_packet(raw_packet: bytes) -> Packet:
 
 
 def verify_packet(packet: Packet) -> bool:
-    """Return True when the payload checksum matches the header checksum."""
+    """Payload özeti başlıktaki checksum ile eşleşirse True döndürür."""
 
     return checksum_payload(packet.payload) == packet.checksum
 
 
 def split_file(path: str, chunk_size: int) -> list[bytes]:
-    """Split a file into chunks that fit into UDP payloads."""
+    """Dosyayı UDP payload alanına sığacak parçalara böler."""
 
     if chunk_size <= 0:
-        raise ValueError("Packet size must be greater than zero")
+        raise ValueError("Paket boyutu sıfırdan büyük olmalıdır")
 
     max_payload = MAX_UDP_PAYLOAD - HEADER_SIZE
     if chunk_size > max_payload:
-        raise ValueError(f"Packet size must be <= {max_payload} bytes")
+        raise ValueError(f"Paket boyutu en fazla {max_payload} byte olmalıdır")
 
     chunks: list[bytes] = []
     with open(path, "rb") as file_obj:
@@ -139,14 +139,14 @@ def split_file(path: str, chunk_size: int) -> list[bytes]:
 
 
 def build_start_payload(file_path: str, total_packets: int, file_hash: str, file_size: int) -> bytes:
-    """Encode transfer metadata for the START packet."""
+    """START paketi için aktarım üst bilgisini encode eder."""
 
     filename = os.path.basename(file_path)
     return f"{filename}|{total_packets}|{file_hash}|{file_size}".encode("utf-8")
 
 
 def parse_start_payload(payload: bytes) -> dict[str, str | int]:
-    """Decode transfer metadata sent by the client."""
+    """İstemcinin gönderdiği aktarım üst bilgisini çözer."""
 
     text = payload.decode("utf-8")
     filename, total_packets, file_hash, file_size = text.split("|", 3)
@@ -156,4 +156,3 @@ def parse_start_payload(payload: bytes) -> dict[str, str | int]:
         "file_hash": file_hash,
         "file_size": int(file_size),
     }
-

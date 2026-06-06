@@ -1,4 +1,4 @@
-"""CSV event logging for NetProbe transfers."""
+"""NetProbe aktarımları için CSV/JSON olay loglama."""
 
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ FIELDNAMES = [
 
 
 class EventLogger:
-    """Collect transfer events and write them to CSV/JSON files."""
+    """Aktarım olaylarını toplar ve CSV/JSON dosyalarına yazar."""
 
     def __init__(self, log_dir: str, prefix: str = "transfer") -> None:
         os.makedirs(log_dir, exist_ok=True)

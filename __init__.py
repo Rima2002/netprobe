@@ -1,2 +1,1 @@
-"""NetProbe: UDP-based reliable file transfer and network analysis platform."""
-
+"""NetProbe: UDP tabanlı güvenilir dosya aktarımı ve ağ analizi platformu."""

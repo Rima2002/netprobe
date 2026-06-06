@@ -1,4 +1,4 @@
-"""Default configuration values for NetProbe."""
+"""NetProbe için varsayılan yapılandırma değerleri."""
 
 DEFAULT_SERVER_IP = "127.0.0.1"
 DEFAULT_SERVER_PORT = 5005

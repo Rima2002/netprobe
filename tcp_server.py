@@ -1,4 +1,4 @@
-"""TCP server for NetProbe comparison experiments."""
+"""NetProbe karşılaştırma deneyleri için TCP sunucusu."""
 
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ def recv_exact(sock: socket.socket, size: int) -> bytes:
     while len(buffer) < size:
         chunk = sock.recv(size - len(buffer))
         if not chunk:
-            raise ConnectionError("Connection closed while receiving data")
+            raise ConnectionError("Veri alınırken bağlantı kapandı")
         buffer.extend(chunk)
     return bytes(buffer)
 
@@ -33,7 +33,7 @@ def send_exact(sock: socket.socket, data: bytes) -> None:
     while total_sent < len(data):
         sent = sock.send(data[total_sent:])
         if sent == 0:
-            raise ConnectionError("Socket connection broken")
+            raise ConnectionError("Socket bağlantısı koptu")
         total_sent += sent
 
 
@@ -46,7 +46,7 @@ def run_server(host: str, port: int, output_dir: str, log_dir: str, once: bool) 
     sock.listen(1)
 
     logger.log(event="server_started", details=f"host={host}; port={port}")
-    print(f"TCP NetProbe server listening on {host}:{port}")
+    print(f"TCP NetProbe sunucusu {host}:{port} üzerinde dinliyor")
 
     try:
         while True:
@@ -122,16 +122,16 @@ def run_server(host: str, port: int, output_dir: str, log_dir: str, once: bool) 
     finally:
         csv_path, json_path = logger.save()
         sock.close()
-        print(f"TCP server logs saved: {csv_path} and {json_path}")
+        print(f"TCP sunucu logları kaydedildi: {csv_path} ve {json_path}")
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="NetProbe TCP file transfer server")
+    parser = argparse.ArgumentParser(description="NetProbe TCP dosya aktarım sunucusu")
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=DEFAULT_SERVER_PORT)
     parser.add_argument("--output-dir", default=RECEIVED_FILES_DIR)
     parser.add_argument("--log-dir", default=LOGS_DIR)
-    parser.add_argument("--once", action="store_true", help="Exit after one completed transfer")
+    parser.add_argument("--once", action="store_true", help="Bir başarılı aktarımdan sonra çık")
     return parser
 
 
