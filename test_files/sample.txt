@@ -1,5 +1,0 @@
-NetProbe sample file.
-This file is used for UDP transfer tests and experiments.
-The client splits it into chunks, sends each chunk with a sequence number,
-waits for an ACK, and retransmits packets when timeout occurs.
-

@@ -1,235 +1,156 @@
-# NetProbe: UDP Tabanlı Güvenilir Dosya Aktarımı, Trafik İzleme ve Ağ Performans Analizi
+# NetProbe: UDP Reliable File Transfer
 
-Bu proje, Bilgisayar Ağları dersi dönem projesi föyünde istenen **UDP üzerinde güvenilir dosya aktarımı**, **trafik/olay loglama** ve **ağ performans analizi** bileşenlerini içeren Python tabanlı bir uygulamadır.
+NetProbe, UDP uzerinde calisan guvenilir dosya aktarimi, trafik loglama ve ag performans analizi projesidir. UDP kendi basina teslim garantisi vermedigi icin proje; sequence number, ACK, timeout, retransmission, duplicate packet kontrolu ve SHA-256 butunluk dogrulamasini uygulama katmaninda elle uygular.
 
-GitHub bağlantısı:
+Ana aktarim yontemi: **UDP + Stop-and-Wait ARQ**.
 
-```text
-https://github.com/Rima2002/netprobe
-```
+## Projenin Amaci
 
-## Projenin Amacı
+- UDP istemci-sunucu mimarisi kurmak
+- Dosyayi paketlere bolerek UDP datagramlari ile aktarmak
+- Her DATA paketi icin ACK beklemek
+- ACK gelmezse timeout sonrasinda ayni paketi yeniden gondermek
+- Duplicate paketleri ikinci kez dosyaya yazmamak
+- Aktarim sonunda SHA-256 ile dosya butunlugunu dogrulamak
+- CSV/JSON loglarindan throughput, goodput, RTT, completion time ve retransmission metrikleri uretmek
+- Deney sonuclarini grafik ve teknik yorumlarla rapora hazir hale getirmek
 
-NetProbe, UDP'nin doğasında bulunmayan güvenilirlik mekanizmalarını uygulama katmanında kendisi uygular. Projede hazır dosya aktarım kütüphanesi kullanılmaz. Dosya aktarımı doğrudan Python `socket` modülü ile UDP üzerinden yapılır.
-
-Amaçlar:
-
-- UDP istemci-sunucu mimarisini kurmak
-- Dosyayı paketlere bölerek UDP ile aktarmak
-- Sequence number, ACK, timeout ve retransmission mekanizmalarını uygulamak
-- Duplicate paketleri tespit edip aynı veriyi ikinci kez yazmamak
-- Aktarım sonunda SHA-256 ile dosya bütünlüğünü doğrulamak
-- Trafik olaylarını CSV/JSON olarak kaydetmek
-- Throughput, goodput, RTT, retransmission ve completion time metriklerini analiz etmek
-- Deney sonuçlarını grafiklerle desteklemek
-
-## Proje Yapısı
+## Klasor Yapisi
 
 ```text
 netprobe/
-  client.py          UDP istemci kodu
-  server.py          UDP sunucu kodu
-  protocol.py        Paket formatı, checksum ve SHA-256 yardımcıları
-  logger.py          CSV/JSON olay loglama sistemi
-  analyzer.py        Performans analizi ve grafik üretimi
-  experiments.py     Otomatik deney senaryoları
-  config.py          Varsayılan ayarlar
-  requirements.txt   Gerekli Python kütüphaneleri
-  test_files/        Test dosyaları
-  received_files/    Sunucuda yeniden oluşturulan dosyalar
-  logs/              İstemci ve sunucu logları
-  results/           Analiz çıktıları ve grafikler
+  client.py                 UDP Stop-and-Wait istemcisi
+  server.py                 UDP sunucusu ve dosya yeniden olusturma
+  protocol.py               Paket formati, checksum ve SHA-256 yardimcilari
+  logger.py                 CSV/JSON olay loglama
+  analyzer.py               Metrik, grafik ve teknik yorum uretimi
+  experiments.py            Otomatik deney senaryolari
+  tcp_client.py             Bonus TCP karsilastirma istemcisi
+  tcp_server.py             Bonus TCP karsilastirma sunucusu
+  tests/                    Unit testler
+  test_files/               Ornek test dosyalari
+  received_files/           Sunucuda olusturulan dosyalar
+  logs/                     Ornek ve yeni transfer loglari
+  results/                  Deney CSV/JSON, grafikler ve teknik yorum
 ```
 
-## Kullanılan Teknolojiler
+Teslim icin beklenen temiz ciktilar:
 
-Python modülleri:
+```text
+test_files/
+  small.txt
+  medium.bin
+  large.bin
 
-- `socket`
-- `time`
-- `hashlib`
-- `struct`
-- `argparse`
-- `csv`
-- `json`
-- `random`
-- `os`
-- `subprocess`
+logs/
+  sample_client_log.csv
+  sample_server_log.csv
 
-Analiz ve grafik için:
-
-- `pandas`
-- `matplotlib`
-
-Kurulum:
-
-```cmd
-cd "C:\Users\Rima Farah Eleuch\OneDrive\Desktop\SPRING SEMESTER 2026\BilgisayarAglari_1\Proje\netprobe"
-python -m pip install -r requirements.txt
+results/
+  experiment_results.csv
+  experiment_results.json
+  technical_interpretation.txt
+  packet_size_results.png
+  timeout_results.png
+  loss_rate_results.png
 ```
 
-Windows `cmd` terminalinde `python` komutu çalışmazsa:
+Eski timestamp'li loglar ve tekrar eden deney grafikleri `archive/` altina tasinabilir. `logs/` klasoru demo ve rapor icin okunabilir ornek loglari tutar.
 
-```cmd
-"%LOCALAPPDATA%\Programs\Python\Python312\python.exe" -m pip install -r requirements.txt
-```
+## Protokol Ozeti
 
-## Paket Formatı
-
-Her veri paketi aşağıdaki alanları içerir:
+Her UDP paketi su alanlardan olusur:
 
 ```text
 packet type | sequence number | total packet count | payload length | checksum | payload
 ```
 
-Paket başlığı `protocol.py` içinde `struct` ile oluşturulur:
+Paket basligi `protocol.py` icinde `struct` ile tanimlanir:
 
 ```text
 !BIIH32s
 ```
 
-Bu alanlar:
+Paket turleri:
 
-- `packet type`: START, DATA, ACK, FIN, FIN_ACK gibi paket türleri
-- `sequence number`: paket sıra numarası
-- `total packet count`: toplam veri paketi sayısı
-- `payload length`: veri uzunluğu
-- `checksum`: paketin payload alanı için SHA-256 checksum
-- `payload`: dosya parçası veya kontrol bilgisi
+- `START`: Dosya adi, toplam paket sayisi, dosya boyutu ve SHA-256 metadata bilgisini tasir.
+- `DATA`: Dosya parcasini tasir.
+- `ACK`: START veya DATA paketinin alindigini bildirir.
+- `FIN`: Aktarimin bittigini ve istemcinin beklenen SHA-256 hash degerini bildirir.
+- `FIN_ACK`: Sunucunun yeniden olusturdugu dosya icin butunluk sonucunu dondurur.
 
-## Güvenilir Aktarım Mekanizması
+## Stop-and-Wait ARQ
 
-Projede temel güvenilirlik yöntemi olarak **Stop-and-Wait ARQ** kullanılır.
+NetProbe varsayilan ve ana mekanizma olarak Stop-and-Wait ARQ kullanir:
 
-Çalışma mantığı:
+1. Istemci bir paket gonderir.
+2. Ayni sequence number icin ACK bekler.
+3. ACK gelirse bir sonraki pakete gecer.
+4. Timeout olursa ayni paketi yeniden gonderir.
+5. Maksimum yeniden gonderim sayisi varsayilan olarak `5` tir.
+6. Sunucu duplicate DATA paketi alirsa veriyi tekrar yazmaz, sadece ACK'i yeniden gonderir.
 
-1. İstemci dosyayı parçalara böler.
-2. Her parçaya sequence number verilir.
-3. İstemci bir DATA paketi gönderir.
-4. Aynı paket için ACK gelene kadar yeni veri paketi göndermez.
-5. ACK belirlenen timeout süresi içinde gelmezse aynı paket yeniden gönderilir.
-6. Varsayılan maksimum yeniden gönderim sayısı `5` olarak ayarlanmıştır.
-7. Paket maksimum deneme sayısından sonra iletilemezse aktarım başarısız kabul edilir ve loglara yazılır.
-8. Sunucu duplicate sequence number görürse aynı payload'u tekrar kaydetmez; sadece doğru ACK'i yeniden gönderir.
-9. Aktarım sonunda sunucu dosyayı doğru sırada birleştirir.
-10. Orijinal dosya SHA-256 hash değeri ile yeniden oluşturulan dosyanın SHA-256 hash değeri karşılaştırılır.
+Bu projede sliding window ana mekanizma degildir; karisiklik olmamasi icin UDP istemcisinde yalnizca Stop-and-Wait akisi tutulmustur.
 
-## Sunucuyu Çalıştırma
+## Kurulum
+
+```cmd
+python -m pip install -r requirements.txt
+```
+
+Gerekli dis kutuphaneler sadece analiz ve grafik icindir:
+
+```text
+pandas
+matplotlib
+```
+
+Dosya aktarimi icin hazir dosya transfer kutuphanesi kullanilmaz; aktarim raw UDP socket programming ile yapilir.
+
+## Server Calistirma
 
 Birinci terminal:
 
 ```cmd
-cd "C:\Users\Rima Farah Eleuch\OneDrive\Desktop\SPRING SEMESTER 2026\BilgisayarAglari_1\Proje\netprobe"
 python server.py --host 127.0.0.1 --port 5005 --once
 ```
 
-Alternatif tam Python yolu:
-
-```cmd
-"%LOCALAPPDATA%\Programs\Python\Python312\python.exe" server.py --host 127.0.0.1 --port 5005 --once
-```
-
-Duplicate paket davranışını loglarda daha görünür yapmak için ACK kaybı simülasyonu:
+ACK kaybi simule etmek icin:
 
 ```cmd
 python server.py --host 127.0.0.1 --port 5005 --once --ack-loss-rate 0.2
 ```
 
-## İstemciyi Çalıştırma
+## Client Calistirma
 
-İkinci terminal:
-
-```cmd
-cd "C:\Users\Rima Farah Eleuch\OneDrive\Desktop\SPRING SEMESTER 2026\BilgisayarAglari_1\Proje\netprobe"
-python client.py --server-ip 127.0.0.1 --server-port 5005 --file test_files\medium.bin
-```
-
-Parametreli örnek:
+Ikinci terminal:
 
 ```cmd
-python client.py --server-ip 127.0.0.1 --server-port 5005 --file test_files\medium.bin --packet-size 1024 --timeout 1.0 --loss-rate 0.1 --max-retries 5
+python client.py --server-ip 127.0.0.1 --server-port 5005 --file test_files/medium.bin
 ```
 
-Parametreler:
-
-- `--server-ip`: sunucu IP adresi
-- `--server-port`: sunucu portu
-- `--file`: gönderilecek dosya yolu
-- `--packet-size`: veri paketi payload boyutu
-- `--timeout`: ACK bekleme süresi
-- `--loss-rate`: yapay paket kaybı oranı
-- `--max-retries`: maksimum yeniden gönderim sayısı
-
-## SHA-256 Bütünlük Kontrolü
-
-Aktarımdan sonra orijinal ve alınan dosyanın hash değerlerini kontrol etmek için:
+Parametreli ornek:
 
 ```cmd
-certutil -hashfile test_files\medium.bin SHA256
-certutil -hashfile received_files\medium.bin SHA256
+python client.py --server-ip 127.0.0.1 --server-port 5005 --file test_files/medium.bin --packet-size 1024 --timeout 1.0 --loss-rate 0.1 --max-retries 5
 ```
 
-İki hash değeri aynı olmalıdır.
+Onemli parametreler:
 
-Program içinde de bütünlük kontrolü yapılır ve loglara şu alan yazılır:
+- `--packet-size`: DATA payload boyutu
+- `--timeout`: ACK bekleme suresi
+- `--loss-rate`: istemci tarafinda yapay paket kaybi
+- `--max-retries`: bir paket icin maksimum yeniden gonderim sayisi
 
-```text
-integrity_ok=True
-```
+## Analyzer Calistirma
 
-Analyzer çıktısında başarılı aktarım için:
-
-```json
-"integrity_ok": true
-```
-
-## Loglama
-
-İstemci ve sunucu logları `logs/` klasörüne CSV ve JSON olarak kaydedilir.
-
-Loglanan başlıca bilgiler:
-
-- paket sıra numarası
-- paket gönderim zamanı
-- ACK alınma zamanı
-- RTT
-- timeout olayları
-- retransmission sayısı
-- duplicate paket sayısı
-- başarılı paket sayısı
-- başarısız paket sayısı
-- toplam aktarım süresi
-- orijinal dosya boyutu
-- aktarılan byte sayısı
-- SHA-256 bütünlük sonucu
-
-Log dosyalarını görmek için:
+En yeni client logunu analiz etmek icin:
 
 ```cmd
-dir logs
+python analyzer.py --log logs/sample_client_log.csv
 ```
 
-## Analiz Çalıştırma
-
-Önce en yeni client log dosyasını bulun:
-
-```cmd
-dir logs\client_transfer_*.csv
-```
-
-Sonra analyzer çalıştırın:
-
-```cmd
-python analyzer.py --log logs\client_transfer_YYYYMMDD_HHMMSS_mmm.csv
-```
-
-Gerçek dosya adı örneği:
-
-```cmd
-python analyzer.py --log logs\client_transfer_20260510_175033_036.csv
-```
-
-Analiz çıktıları:
+Analyzer su dosyalari uretir:
 
 ```text
 results/analysis_summary.csv
@@ -238,135 +159,74 @@ results/analysis_summary.json
 
 Hesaplanan metrikler:
 
-- throughput
-- goodput
-- packet loss rate
-- retransmission count
-- retransmission rate
-- average RTT
-- completion time
-- duplicate count
-- integrity status
+- `throughput`: retransmission ve kayip denemeleri dahil gonderilmeye calisilan DATA byte / sure
+- `goodput`: basariyla yeniden olusturulan orijinal dosya byte / sure
+- `packet_loss_rate`
+- `retransmission_count`
+- `retransmission_rate`
+- `average_rtt`
+- `completion_time`
+- `duplicate_count`
+- `integrity_ok`
 
-## Deneyleri Çalıştırma
-
-Deney betiği test dosyalarını otomatik üretir:
-
-```text
-test_files/small.bin   >= 10 KB
-test_files/medium.bin  >= 1 MB
-test_files/large.bin   >= 10 MB
-```
-
-Deneyleri çalıştırmak için:
+## Deneyleri Calistirma
 
 ```cmd
 python experiments.py
 ```
 
-Deney sonuçları:
+Deneyler su senaryolari uretir:
+
+- farkli paket boyutlari
+- farkli timeout degerleri
+- farkli yapay kayip oranlari
+- bonus olarak UDP/TCP karsilastirma satirlari
+
+Deney ciktilari:
 
 ```text
 results/experiment_results.csv
+results/experiment_results.json
+results/technical_interpretation.txt
+results/packet_size_results.png
+results/timeout_results.png
+results/loss_rate_results.png
 ```
 
-CSV içinde rapor yazmayı kolaylaştıran alanlar:
+`technical_interpretation.txt`, rapora dogrudan eklenebilecek kisa teknik Turkce yorumlar icerir.
 
-```text
-scenario, packet_size, timeout, loss_rate, file_size, throughput, goodput,
-completion_time, retransmission_count, retransmission_rate, packet_loss_rate,
-average_rtt, duplicate_count, integrity_ok
-```
-
-## Deney Senaryoları
-
-Föyde önerilen deneylerden proje içinde kullanılan başlıca senaryolar:
-
-1. **Paket boyutunun etkisi**
-   - Farklı packet size değerleri ile throughput, goodput ve completion time karşılaştırılır.
-
-2. **Timeout değerinin etkisi**
-   - Farklı timeout değerlerinin retransmission count ve completion time üzerindeki etkisi incelenir.
-
-3. **Yapay kayıp oranının etkisi**
-   - Farklı loss rate değerleri ile retransmission rate, throughput ve goodput karşılaştırılır.
-
-4. **Farklı dosya boyutları**
-   - `small.bin`, `medium.bin` ve `large.bin` dosyaları deney veya demo için kullanılabilir.
-
-## Grafikler
-
-Deneylerden sonra `results/` klasöründe aşağıdaki grafikler oluşur:
-
-```text
-packet_size_throughput_goodput.png
-packet_size_completion_time.png
-timeout_retransmission_count.png
-timeout_completion_time.png
-loss_rate_throughput_goodput.png
-loss_rate_retransmission_rate.png
-```
-
-Grafikleri açmak için:
+## Unit Testler
 
 ```cmd
-start results\packet_size_throughput_goodput.png
-start results\timeout_retransmission_count.png
-start results\loss_rate_retransmission_rate.png
+python -m unittest discover tests
 ```
 
-## Teknik Rapor İçin Önerilen Bölümler
+Testler sunlari kontrol eder:
 
-PDF föyüne göre teknik raporda şu bölümlerin bulunması beklenir:
+- checksum hesaplama
+- DATA packet olusturma/parse etme
+- ACK packet olusturma/parse etme
+- ayni dosya icin SHA-256 sonucunun sabit olmasi
+- duplicate packet'in ikinci kez saklanmamasi
+- analyzer metriklerinin beklenen degerleri hesaplamasi
 
-- Giriş
-- Problem tanımı
-- Sistem mimarisi
-- Protokol tasarımı
-- Gerçekleme detayları
-- Deney ortamı
-- Performans metrikleri
-- Sonuçlar ve tartışma
-- Karşılaşılan sorunlar ve çözüm yaklaşımları
-- Sonuç ve gelecekte yapılabilecek geliştirmeler
+## SHA-256 Kontrolu
 
-Raporda sadece grafik koymak yeterli değildir. Her deney sonucu protokol davranışıyla ilişkilendirilerek teknik olarak yorumlanmalıdır.
+Windows ortaminda manuel kontrol:
 
-Örnek yorum başlıkları:
-
-- Paket boyutu artınca throughput nasıl değişti?
-- Timeout değeri retransmission sayısını nasıl etkiledi?
-- Kayıp oranı goodput ve completion time üzerinde nasıl bir etki oluşturdu?
-- Duplicate paketler nasıl ele alındı?
-- SHA-256 bütünlük kontrolü neyi doğruladı?
-
-## Teslim İçeriği
-
-Föye göre teslim:
-
-```text
-.zip dosyası + GitHub bağlantısı + teknik rapor (PDF)
+```cmd
+certutil -hashfile test_files\medium.bin SHA256
+certutil -hashfile received_files\medium.bin SHA256
 ```
 
-`.zip` içinde en az şunlar bulunmalıdır:
+Iki hash ayniysa aktarim basarilidir. Program bu kontrolu otomatik yapar ve loglarda `integrity_ok=true` olarak yazar.
 
-- kaynak kodlar
-- teknik rapor PDF dosyası
-- README dosyası
-- varsa loglar, grafikler veya deney sonuçları
-
-GitHub bağlantısı README içinde açıkça verilmiştir:
+## GitHub
 
 ```text
 https://github.com/Rima2002/netprobe
 ```
 
-## Uygunluk Notları
+## Teslim Notu
 
-- Hazır dosya aktarım kütüphanesi kullanılmamıştır.
-- İstemci-sunucu haberleşmesi doğrudan UDP socket programming ile yapılır.
-- Güvenilirlik mekanizması uygulama katmanında manuel olarak geliştirilmiştir.
-- Sequence number, ACK, timeout, retransmission ve duplicate paket kontrolü uygulanmıştır.
-- Aktarım sonunda SHA-256 ile dosya bütünlüğü doğrulanır.
-- Dış kütüphaneler yalnızca analiz ve grafik amaçlı `pandas` ve `matplotlib` olarak kullanılmıştır.
-
+Final teslim icin `.zip` icinde kaynak kodlar, README, teknik rapor PDF'i, gerekli log/sonuc/grafik ornekleri ve test dosyalari bulunmalidir. Teknik raporda yalnizca grafik verilmemeli; paket boyutu, timeout ve kayip oraninin protokol davranisina etkisi teknik olarak yorumlanmalidir.

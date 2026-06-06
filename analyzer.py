@@ -74,22 +74,24 @@ def analyze_log(log_path: str) -> dict[str, float | int | str]:
         and "ack_for=DATA" in row.get("details", "")
     ]
 
-    transferred_bytes = sum(int(as_float(row.get("payload_bytes"))) for row in data_send_events)
+    # Throughput: retransmission ve yapay kayıp denemeleri dahil gönderilmeye çalışılan DATA byte miktarı.
+    # Goodput: alıcıda başarıyla yeniden oluşturulan gerçek dosya byte miktarı.
+    data_payload_bytes_attempted = sum(
+        int(as_float(row.get("payload_bytes"))) for row in data_send_events + simulated_loss_events
+    )
     completion_events = [row for row in events if row.get("event") == "transfer_completed"]
     reconstruction_events = [row for row in events if row.get("event") == "file_reconstructed"]
     original_file_bytes = 0
     if completion_events:
         completion_details = parse_details(completion_events[-1].get("details", ""))
         original_file_bytes = int(as_float(completion_details.get("original_file_size"), completion_events[-1].get("payload_bytes")))
-        transferred_bytes = int(as_float(completion_details.get("transferred_bytes"), transferred_bytes))
         completion_time = as_float(completion_details.get("total_transfer_time"), completion_time)
     elif reconstruction_events:
         reconstruction_details = parse_details(reconstruction_events[-1].get("details", ""))
         original_file_bytes = int(as_float(reconstruction_details.get("original_file_size"), reconstruction_events[-1].get("payload_bytes")))
-        transferred_bytes = int(as_float(reconstruction_details.get("transferred_bytes"), original_file_bytes))
         completion_time = as_float(reconstruction_details.get("total_transfer_time"), completion_time)
     else:
-        original_file_bytes = transferred_bytes
+        original_file_bytes = data_payload_bytes_attempted
 
     attempted_sends = len(data_send_events) + len(simulated_loss_events)
     retransmission_events = [
@@ -127,7 +129,7 @@ def analyze_log(log_path: str) -> dict[str, float | int | str]:
                 integrity_ok = parsed_integrity
                 break
 
-    throughput = transferred_bytes / completion_time if completion_time > 0 else 0.0
+    throughput = data_payload_bytes_attempted / completion_time if completion_time > 0 else 0.0
     goodput = original_file_bytes / completion_time if completion_time > 0 else 0.0
     packet_loss_rate = len(simulated_loss_events) / attempted_sends if attempted_sends else 0.0
     retransmission_rate = retransmission_count / attempted_sends if attempted_sends else 0.0
@@ -152,8 +154,8 @@ def analyze_log(log_path: str) -> dict[str, float | int | str]:
         "successful_packet_count": len(successful_data_acks),
         "failed_packet_count": len(failed_events),
         "timeout_count": len(timeout_events),
-        "transferred_bytes": transferred_bytes,
-        "data_bytes_sent": transferred_bytes,
+        "transferred_bytes": data_payload_bytes_attempted,
+        "data_bytes_sent": data_payload_bytes_attempted,
         "original_file_bytes": original_file_bytes,
     }
 
@@ -187,52 +189,25 @@ def plot_experiment_results(results_csv: str, output_dir: str) -> list[str]:
             ["goodput", "throughput"],
             "Bytes / second",
             "Packet Size vs Throughput and Goodput",
-            "packet_size_throughput_goodput.png",
-        ),
-        (
-            "packet_size",
-            "packet_size",
-            "Packet Size (bytes)",
-            ["completion_time"],
-            "Seconds",
-            "Packet Size vs Completion Time",
-            "packet_size_completion_time.png",
+            "packet_size_results.png",
         ),
         (
             "timeout",
             "timeout",
             "Timeout (seconds)",
-            ["retransmission_count"],
-            "Retransmitted packets",
-            "Timeout vs Retransmission Count",
-            "timeout_retransmission_count.png",
-        ),
-        (
-            "timeout",
-            "timeout",
-            "Timeout (seconds)",
-            ["completion_time"],
-            "Seconds",
-            "Timeout vs Completion Time",
-            "timeout_completion_time.png",
+            ["retransmission_count", "completion_time"],
+            "Count / seconds",
+            "Timeout vs Retransmission Count and Completion Time",
+            "timeout_results.png",
         ),
         (
             "loss_rate",
             "loss_rate",
             "Artificial Loss Rate",
-            ["goodput", "throughput"],
-            "Bytes / second",
-            "Loss Rate vs Throughput and Goodput",
-            "loss_rate_throughput_goodput.png",
-        ),
-        (
-            "loss_rate",
-            "loss_rate",
-            "Artificial Loss Rate",
-            ["retransmission_rate"],
-            "Retransmissions / attempted sends",
-            "Loss Rate vs Retransmission Rate",
-            "loss_rate_retransmission_rate.png",
+            ["goodput", "throughput", "retransmission_rate"],
+            "Bytes/s or rate",
+            "Loss Rate vs Goodput, Throughput and Retransmission Rate",
+            "loss_rate_results.png",
         ),
     ]
 
@@ -260,6 +235,110 @@ def plot_experiment_results(results_csv: str, output_dir: str) -> list[str]:
     return graph_paths
 
 
+def save_experiment_results_json(results_csv: str, output_dir: str) -> str:
+    """Deney CSV çıktısının JSON kopyasını üretir."""
+
+    data = pd.read_csv(results_csv)
+    json_path = os.path.join(output_dir, "experiment_results.json")
+    with open(json_path, "w", encoding="utf-8") as json_file:
+        json.dump(data.to_dict(orient="records"), json_file, indent=2)
+    return json_path
+
+
+def metric_change_text(start: float, end: float, unit: str = "") -> str:
+    if start == 0:
+        return f"{end:.4f}{unit}"
+    change = ((end - start) / start) * 100
+    direction = "arttı" if change >= 0 else "azaldı"
+    return f"{abs(change):.2f}% {direction} ({start:.4f}{unit} -> {end:.4f}{unit})"
+
+
+def generate_technical_interpretation(results_csv: str, output_dir: str) -> str:
+    """Deney sonuçlarından rapora eklenebilecek kısa Türkçe yorum üretir."""
+
+    os.makedirs(output_dir, exist_ok=True)
+    data = pd.read_csv(results_csv)
+    lines = [
+        "NetProbe Teknik Deney Yorumu",
+        "=============================",
+        "",
+        "Bu yorumlar, UDP üzerinde Stop-and-Wait ARQ kullanan NetProbe deney çıktılarından otomatik üretilmiştir.",
+        "",
+    ]
+
+    packet_data = data[data["scenario"] == "packet_size"].sort_values("packet_size")
+    if len(packet_data) >= 2:
+        first = packet_data.iloc[0]
+        last = packet_data.iloc[-1]
+        lines.extend(
+            [
+                "1. Paket boyutunun etkisi",
+                (
+                    f"Paket boyutu {int(first['packet_size'])} bayttan {int(last['packet_size'])} bayta çıktığında "
+                    f"goodput {metric_change_text(float(first['goodput']), float(last['goodput']), ' B/s')}. "
+                    "Daha büyük paketler aynı dosya için daha az ACK bekleme turu oluşturduğu için Stop-and-Wait "
+                    "mekanizmasında protokol ek yükü azalır. Kayıp yoksa throughput ve goodput genellikle artar; "
+                    "ancak çok büyük paketler gerçek ağda kayıp maliyetini artırabilir."
+                ),
+                "",
+            ]
+        )
+
+    timeout_data = data[data["scenario"] == "timeout"].sort_values("timeout")
+    if len(timeout_data) >= 2:
+        first = timeout_data.iloc[0]
+        last = timeout_data.iloc[-1]
+        lines.extend(
+            [
+                "2. Timeout değerinin etkisi",
+                (
+                    f"Timeout {float(first['timeout']):.2f} saniyeden {float(last['timeout']):.2f} saniyeye çıktığında "
+                    f"retransmission sayısı {metric_change_text(float(first['retransmission_count']), float(last['retransmission_count']))}. "
+                    "Timeout çok küçük seçilirse ACK yolda olsa bile paket kaybolmuş gibi kabul edilebilir ve gereksiz "
+                    "yeniden gönderimler oluşabilir. Timeout çok büyük seçilirse gerçek kayıp durumunda istemci daha uzun "
+                    "bekler ve completion time artabilir."
+                ),
+                "",
+            ]
+        )
+
+    loss_data = data[data["scenario"] == "loss_rate"].sort_values("loss_rate")
+    if len(loss_data) >= 2:
+        first = loss_data.iloc[0]
+        last = loss_data.iloc[-1]
+        lines.extend(
+            [
+                "3. Yapay paket kaybının etkisi",
+                (
+                    f"Kayıp oranı {float(first['loss_rate']):.2f} değerinden {float(last['loss_rate']):.2f} değerine çıktığında "
+                    f"retransmission rate {metric_change_text(float(first['retransmission_rate']), float(last['retransmission_rate']))}; "
+                    f"goodput ise {metric_change_text(float(first['goodput']), float(last['goodput']), ' B/s')}. "
+                    "Kayıp arttıkça istemci daha fazla timeout yaşar ve aynı sequence number için yeniden gönderim yapar. "
+                    "Bu durum aktarılan toplam veri denemelerini artırırken faydalı veri hızını düşürebilir."
+                ),
+                "",
+            ]
+        )
+
+    lines.extend(
+        [
+            "4. Bütünlük ve duplicate paketler",
+            (
+                "Her aktarım sonunda sunucuda oluşturulan dosyanın SHA-256 değeri istemcinin gönderdiği hash ile "
+                "karşılaştırılır. integrity_ok=True sonucu dosyanın eksiksiz ve doğru sırada yeniden oluşturulduğunu "
+                "gösterir. Duplicate DATA paketi gelirse sunucu aynı veriyi ikinci kez yazmaz; yalnızca ilgili ACK'i "
+                "yeniden gönderir."
+            ),
+            "",
+        ]
+    )
+
+    interpretation_path = os.path.join(output_dir, "technical_interpretation.txt")
+    with open(interpretation_path, "w", encoding="utf-8") as output_file:
+        output_file.write("\n".join(lines))
+    return interpretation_path
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Analyze NetProbe logs")
     parser.add_argument("--log", help="Client CSV log to analyze")
@@ -281,10 +360,14 @@ def main() -> None:
         print(f"Analysis saved: {csv_path} and {json_path}")
 
     if args.results_csv:
+        json_path = save_experiment_results_json(args.results_csv, args.output_dir)
         graph_paths = plot_experiment_results(args.results_csv, args.output_dir)
+        interpretation_path = generate_technical_interpretation(args.results_csv, args.output_dir)
+        print(f"Experiment JSON saved: {json_path}")
         print("Graphs generated:")
         for graph_path in graph_paths:
             print(f"  {graph_path}")
+        print(f"Technical interpretation saved: {interpretation_path}")
 
 
 if __name__ == "__main__":

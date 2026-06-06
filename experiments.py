@@ -12,16 +12,26 @@ import time
 from typing import Any
 
 try:
-    from .analyzer import analyze_log, plot_experiment_results
-    from .config import DEFAULT_MAX_RETRIES, LOGS_DIR, RESULTS_DIR, TEST_FILES_DIR
+    from .analyzer import (
+        analyze_log,
+        generate_technical_interpretation,
+        plot_experiment_results,
+        save_experiment_results_json,
+    )
+    from .config import DEFAULT_DELAY_MS, DEFAULT_MAX_RETRIES, LOGS_DIR, RESULTS_DIR, TEST_FILES_DIR
 except ImportError:
-    from analyzer import analyze_log, plot_experiment_results
-    from config import DEFAULT_MAX_RETRIES, LOGS_DIR, RESULTS_DIR, TEST_FILES_DIR
+    from analyzer import (
+        analyze_log,
+        generate_technical_interpretation,
+        plot_experiment_results,
+        save_experiment_results_json,
+    )
+    from config import DEFAULT_DELAY_MS, DEFAULT_MAX_RETRIES, LOGS_DIR, RESULTS_DIR, TEST_FILES_DIR
 
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 TEST_FILE_SPECS = {
-    "small": ("small.bin", 64 * 1024),
+    "small": ("small.txt", 64 * 1024),
     "medium": ("medium.bin", 1024 * 1024),
     "large": ("large.bin", 10 * 1024 * 1024),
 }
@@ -64,45 +74,83 @@ def run_one_transfer(
     max_retries: int,
     log_dir: str,
     output_dir: str,
+    protocol: str = "UDP",
+    delay_ms: float = DEFAULT_DELAY_MS,
 ) -> tuple[str, str]:
     os.makedirs(log_dir, exist_ok=True)
     os.makedirs(output_dir, exist_ok=True)
-    before_logs = set(glob.glob(os.path.join(log_dir, "client_transfer_*.csv")))
-    before_server_logs = set(glob.glob(os.path.join(log_dir, "server_transfer_*.csv")))
+    protocol = protocol.upper()
+    client_log_prefix = "client_transfer" if protocol == "UDP" else "tcp_client"
+    server_log_prefix = "server_transfer" if protocol == "UDP" else "tcp_server"
+    before_logs = set(glob.glob(os.path.join(log_dir, f"{client_log_prefix}_*.csv")))
+    before_server_logs = set(glob.glob(os.path.join(log_dir, f"{server_log_prefix}_*.csv")))
 
-    server_cmd = [
-        sys.executable,
-        os.path.join(BASE_DIR, "server.py"),
-        "--host",
-        "127.0.0.1",
-        "--port",
-        str(port),
-        "--output-dir",
-        os.path.join(BASE_DIR, "received_files"),
-        "--log-dir",
-        log_dir,
-        "--once",
-    ]
-    client_cmd = [
-        sys.executable,
-        os.path.join(BASE_DIR, "client.py"),
-        "--server-ip",
-        "127.0.0.1",
-        "--server-port",
-        str(port),
-        "--file",
-        file_path,
-        "--packet-size",
-        str(packet_size),
-        "--timeout",
-        str(timeout),
-        "--loss-rate",
-        str(loss_rate),
-        "--max-retries",
-        str(max_retries),
-        "--log-dir",
-        log_dir,
-    ]
+    if protocol == "TCP":
+        server_cmd = [
+            sys.executable,
+            os.path.join(BASE_DIR, "tcp_server.py"),
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(port),
+            "--output-dir",
+            os.path.join(BASE_DIR, "received_files"),
+            "--log-dir",
+            log_dir,
+            "--once",
+        ]
+        client_cmd = [
+            sys.executable,
+            os.path.join(BASE_DIR, "tcp_client.py"),
+            "--server-ip",
+            "127.0.0.1",
+            "--server-port",
+            str(port),
+            "--file",
+            file_path,
+            "--packet-size",
+            str(packet_size),
+            "--timeout",
+            str(timeout),
+            "--log-dir",
+            log_dir,
+        ]
+    else:
+        server_cmd = [
+            sys.executable,
+            os.path.join(BASE_DIR, "server.py"),
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(port),
+            "--output-dir",
+            os.path.join(BASE_DIR, "received_files"),
+            "--log-dir",
+            log_dir,
+            "--once",
+        ]
+        client_cmd = [
+            sys.executable,
+            os.path.join(BASE_DIR, "client.py"),
+            "--server-ip",
+            "127.0.0.1",
+            "--server-port",
+            str(port),
+            "--file",
+            file_path,
+            "--packet-size",
+            str(packet_size),
+            "--timeout",
+            str(timeout),
+            "--loss-rate",
+            str(loss_rate),
+            "--max-retries",
+            str(max_retries),
+            "--delay-ms",
+            str(delay_ms),
+            "--log-dir",
+            log_dir,
+        ]
 
     server_process = subprocess.Popen(
         server_cmd,
@@ -138,8 +186,8 @@ def run_one_transfer(
             server_process.terminate()
             server_process.wait(timeout=5)
 
-    client_log = latest_log(log_dir, "client_transfer", before_logs)
-    server_log = latest_log(log_dir, "server_transfer", before_server_logs)
+    client_log = latest_log(log_dir, client_log_prefix, before_logs)
+    server_log = latest_log(log_dir, server_log_prefix, before_server_logs)
     return client_log, server_log
 
 
@@ -160,10 +208,12 @@ def run_experiments(
         scenarios.append(
             {
                 "scenario": "packet_size",
+                "protocol": "UDP",
                 "file_path": generated_files["medium"],
                 "packet_size": packet_size,
                 "timeout": 1.0,
                 "loss_rate": 0.0,
+                "delay_ms": 0.0,
             }
         )
 
@@ -171,10 +221,12 @@ def run_experiments(
         scenarios.append(
             {
                 "scenario": "timeout",
+                "protocol": "UDP",
                 "file_path": generated_files["small"],
                 "packet_size": 1024,
                 "timeout": timeout,
                 "loss_rate": 0.1,
+                "delay_ms": 0.0,
             }
         )
 
@@ -182,12 +234,38 @@ def run_experiments(
         scenarios.append(
             {
                 "scenario": "loss_rate",
+                "protocol": "UDP",
                 "file_path": generated_files["small"],
                 "packet_size": 1024,
                 "timeout": 0.2,
                 "loss_rate": loss_rate,
+                "delay_ms": 0.0,
             }
         )
+
+    # Add a TCP/UDP protocol comparison with the same medium-sized test file.
+    scenarios.append(
+        {
+            "scenario": "protocol",
+            "protocol": "UDP",
+            "file_path": generated_files["medium"],
+            "packet_size": 1024,
+            "timeout": 1.0,
+            "loss_rate": 0.0,
+            "delay_ms": 0.0,
+        }
+    )
+    scenarios.append(
+        {
+            "scenario": "protocol",
+            "protocol": "TCP",
+            "file_path": generated_files["medium"],
+            "packet_size": 1024,
+            "timeout": 1.0,
+            "loss_rate": 0.0,
+            "delay_ms": 0.0,
+        }
+    )
 
     results: list[dict[str, Any]] = []
     current_port = port
@@ -202,12 +280,15 @@ def run_experiments(
             max_retries=max_retries,
             log_dir=log_dir,
             output_dir=output_dir,
+            protocol=str(scenario.get("protocol", "UDP")),
+            delay_ms=float(scenario.get("delay_ms", DEFAULT_DELAY_MS)),
         )
         client_metrics = analyze_log(client_log)
         server_metrics = analyze_log(server_log)
         results.append(
             {
                 "scenario": scenario["scenario"],
+                "protocol": scenario.get("protocol", "UDP"),
                 "packet_size": scenario["packet_size"],
                 "timeout": scenario["timeout"],
                 "loss_rate": scenario["loss_rate"],
@@ -231,6 +312,7 @@ def run_experiments(
     results_csv = os.path.join(output_dir, "experiment_results.csv")
     fieldnames = [
         "scenario",
+        "protocol",
         "packet_size",
         "timeout",
         "loss_rate",
@@ -252,7 +334,9 @@ def run_experiments(
         writer.writeheader()
         writer.writerows(results)
 
+    save_experiment_results_json(results_csv, output_dir)
     graph_paths = plot_experiment_results(results_csv, output_dir)
+    generate_technical_interpretation(results_csv, output_dir)
     return results_csv, graph_paths
 
 
@@ -264,7 +348,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional custom file to generate/use for experiments; defaults use small.bin and medium.bin",
     )
     parser.add_argument("--port", type=int, default=6100)
-    parser.add_argument("--max-retries", type=int, default=max(DEFAULT_MAX_RETRIES, 8))
+    parser.add_argument("--max-retries", type=int, default=DEFAULT_MAX_RETRIES)
     parser.add_argument("--log-dir", default=os.path.join(BASE_DIR, LOGS_DIR))
     parser.add_argument("--output-dir", default=os.path.join(BASE_DIR, RESULTS_DIR))
     return parser

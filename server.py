@@ -64,6 +64,19 @@ def should_drop(loss_rate: float) -> bool:
     return loss_rate > 0 and random.random() < loss_rate
 
 
+def store_chunk_if_new(session: TransferSession, sequence_number: int, payload: bytes) -> str:
+    """DATA paketini yalnızca ilk kez geldiyse saklar."""
+
+    if sequence_number in session.chunks:
+        session.duplicate_count += 1
+        return "duplicate"
+    if sequence_number >= session.total_packets:
+        return "out_of_range"
+
+    session.chunks[sequence_number] = payload
+    return "stored"
+
+
 def send_ack(
     sock: socket.socket,
     address: tuple[str, int],
@@ -112,10 +125,12 @@ def reconstruct_file(session: TransferSession, output_dir: str) -> tuple[str, st
     os.makedirs(output_dir, exist_ok=True)
     output_path = safe_received_path(output_dir, session.filename)
 
+    # Sequence number sırasına göre parçalar birleştirilir.
     with open(output_path, "wb") as output_file:
         for sequence_number in range(session.total_packets):
             output_file.write(session.chunks[sequence_number])
 
+    # Aktarım sonunda SHA-256 ile dosya bütünlüğü doğrulanır.
     actual_hash = file_sha256(output_path)
     return output_path, actual_hash, actual_hash == session.expected_hash
 
@@ -130,6 +145,7 @@ def run_server(
 ) -> None:
     os.makedirs(output_dir, exist_ok=True)
     logger = EventLogger(log_dir, prefix="server_transfer")
+    # UDP socket kurulumu: bağlantı kurmadan datagram alır/gönderir.
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.bind((host, port))
     sessions: dict[tuple[str, int], TransferSession] = {}
@@ -223,8 +239,9 @@ def run_server(
                 continue
 
             if packet.packet_type == TYPE_DATA:
-                if packet.sequence_number in session.chunks:
-                    session.duplicate_count += 1
+                # Duplicate DATA paketi aynı dosya parçasını ikinci kez yazdırmaz.
+                store_status = store_chunk_if_new(session, packet.sequence_number, packet.payload)
+                if store_status == "duplicate":
                     logger.log(
                         event="duplicate_packet_ignored",
                         packet_type=packet_name,
@@ -235,15 +252,14 @@ def run_server(
                             f"duplicate_count={session.duplicate_count}"
                         ),
                     )
-                elif packet.sequence_number >= session.total_packets:
+                elif store_status == "out_of_range":
                     logger.log(
                         event="out_of_range_packet_ignored",
                         packet_type=packet_name,
                         sequence_number=packet.sequence_number,
-                        details=f"total_packets={session.total_packets}",
+                            details=f"total_packets={session.total_packets}",
                     )
                 else:
-                    session.chunks[packet.sequence_number] = packet.payload
                     logger.log(
                         event="chunk_stored",
                         packet_type=packet_name,

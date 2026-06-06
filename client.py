@@ -1,4 +1,9 @@
-"""UDP client for NetProbe reliable file transfer."""
+"""NetProbe UDP istemcisi.
+
+Bu dosya projenin ana akışını sade biçimde tutar:
+dosyayı parçala, START metadata paketini gönder, DATA paketlerini
+Stop-and-Wait ARQ ile aktar, FIN paketiyle SHA-256 doğrulamasını tamamla.
+"""
 
 from __future__ import annotations
 
@@ -63,31 +68,16 @@ except ImportError:
 
 
 def should_drop(loss_rate: float) -> bool:
-    """Return True when artificial client-side packet loss should be simulated."""
+    """Yapay paket kaybı simülasyonu için gönderimi atlayıp atlamayacağını döndürür."""
 
     return loss_rate > 0 and random.random() < loss_rate
 
 
-def wait_for_ack(
-    sock: socket.socket,
-    expected_type: int,
-    expected_sequence: int,
-    expected_payload: bytes,
-) -> tuple[float, str]:
-    """Wait for a valid ACK and return receive time plus ACK payload text."""
+def maybe_delay(delay_ms: float) -> None:
+    """Deneylerde gecikme etkisini görmek için isteğe bağlı bekleme uygular."""
 
-    while True:
-        raw_ack, _ = sock.recvfrom(HEADER_SIZE + 1024)
-        ack = parse_packet(raw_ack)
-
-        if not verify_packet(ack):
-            continue
-
-        ack_text = ack.payload.decode("ascii", errors="replace")
-        ack_for = ack_text.split(";", 1)[0].encode("ascii")
-
-        if ack.packet_type == expected_type and ack.sequence_number == expected_sequence and ack_for == expected_payload:
-            return time.time(), ack_text
+    if delay_ms > 0:
+        time.sleep(delay_ms / 1000.0)
 
 
 def parse_ack_details(ack_text: str) -> dict[str, str]:
@@ -100,7 +90,54 @@ def parse_ack_details(ack_text: str) -> dict[str, str]:
     return details
 
 
-def send_with_stop_and_wait(
+def wait_for_matching_ack(
+    sock: socket.socket,
+    expected_ack_type: int,
+    expected_sequence: int,
+    expected_ack_for: str,
+) -> tuple[float, str]:
+    """Beklenen sequence number için doğru ACK paketini bekler."""
+
+    while True:
+        # ACK bekleme socket timeout ile sınırlıdır; timeout olursa üst katman yeniden gönderir.
+        raw_ack, _ = sock.recvfrom(HEADER_SIZE + 1024)
+        ack = parse_packet(raw_ack)
+
+        if not verify_packet(ack):
+            continue
+
+        ack_text = ack.payload.decode("ascii", errors="replace")
+        ack_for = ack_text.split(";", 1)[0]
+
+        if (
+            ack.packet_type == expected_ack_type
+            and ack.sequence_number == expected_sequence
+            and ack_for == expected_ack_for
+        ):
+            return time.time(), ack_text
+
+
+def log_packet_send(
+    logger: EventLogger,
+    event: str,
+    packet_name: str,
+    sequence_number: int,
+    attempt: int,
+    payload_size: int,
+    send_time: float,
+    delay_ms: float,
+) -> None:
+    logger.log(
+        event=event,
+        packet_type=packet_name,
+        sequence_number=sequence_number,
+        attempt=attempt,
+        payload_bytes=payload_size,
+        details=f"send_time={send_time}; delay_ms={delay_ms}",
+    )
+
+
+def send_reliable_packet(
     sock: socket.socket,
     server_address: tuple[str, int],
     packet_type: int,
@@ -111,66 +148,76 @@ def send_with_stop_and_wait(
     timeout: float,
     max_retries: int,
     loss_rate: float,
+    delay_ms: float,
     logger: EventLogger,
-) -> tuple[bool, int, float | None, dict[str, str]]:
-    """Send one packet until its ACK arrives or retry budget is exhausted.
+) -> tuple[bool, int, dict[str, str]]:
+    """Bir paketi Stop-and-Wait ARQ ile güvenilir şekilde gönderir.
 
-    Stop-and-Wait means exactly one unacknowledged packet exists at a time.
-    If the ACK is missing after the timeout, the client retransmits the same
-    sequence number, allowing the server to detect duplicates and ACK them.
+    Her turda tek paket gönderilir ve aynı sequence number için ACK beklenir.
+    ACK gelmezse timeout oluşur ve paket yeniden gönderilir.
     """
 
-    encoded_packet = make_packet(packet_type, sequence_number, total_packets, payload)
+    packet = make_packet(packet_type, sequence_number, total_packets, payload)
     packet_name = TYPE_NAMES.get(packet_type, str(packet_type))
     ack_name = TYPE_NAMES.get(expected_ack_type, str(expected_ack_type))
-    attempts = 0
 
-    while attempts <= max_retries:
-        attempts += 1
+    for attempt in range(1, max_retries + 2):
         send_time = time.time()
+        maybe_delay(delay_ms)
 
+        # Yapay kayıp varsa datagram gerçekten gönderilmez; bu deney amaçlıdır.
         if should_drop(loss_rate):
             logger.log(
                 event="simulated_packet_loss",
                 packet_type=packet_name,
                 sequence_number=sequence_number,
-                attempt=attempts,
+                attempt=attempt,
                 payload_bytes=len(payload),
-                details=f"send_time={send_time}; client_skipped_send_for_artificial_loss=True",
+                details=(
+                    f"send_time={send_time}; "
+                    "client_skipped_send_for_artificial_loss=True; "
+                    f"delay_ms={delay_ms}"
+                ),
             )
         else:
-            sock.sendto(encoded_packet, server_address)
-            logger.log(
-                event="packet_sent",
-                packet_type=packet_name,
-                sequence_number=sequence_number,
-                attempt=attempts,
-                payload_bytes=len(payload),
-                details=f"send_time={send_time}",
+            sock.sendto(packet, server_address)
+            log_packet_send(
+                logger,
+                "packet_sent",
+                packet_name,
+                sequence_number,
+                attempt,
+                len(payload),
+                send_time,
+                delay_ms,
             )
 
         try:
-            ack_time, ack_text = wait_for_ack(sock, expected_ack_type, sequence_number, packet_name.encode("ascii"))
-            rtt = ack_time - send_time if ack_time is not None else None
-            ack_for = packet_name
+            ack_time, ack_text = wait_for_matching_ack(
+                sock,
+                expected_ack_type,
+                sequence_number,
+                packet_name,
+            )
             ack_details = parse_ack_details(ack_text)
             logger.log(
                 event="ack_received",
                 packet_type=ack_name,
                 sequence_number=sequence_number,
-                attempt=attempts,
+                attempt=attempt,
                 payload_bytes=0,
-                rtt=rtt if rtt is not None else "",
+                rtt=ack_time - send_time,
                 integrity_ok=ack_details.get("integrity_ok", ""),
-                details=f"ack_for={ack_for}; ack_receive_time={ack_time}; raw_ack_payload={ack_text}",
+                details=f"ack_for={packet_name}; ack_receive_time={ack_time}; raw_ack_payload={ack_text}",
             )
-            return True, attempts - 1, rtt, ack_details
+            return True, attempt - 1, ack_details
         except socket.timeout:
+            # Timeout, Stop-and-Wait içinde retransmission kararını tetikler.
             logger.log(
                 event="timeout",
                 packet_type=packet_name,
                 sequence_number=sequence_number,
-                attempt=attempts,
+                attempt=attempt,
                 payload_bytes=len(payload),
                 details=f"No ACK within {timeout} seconds; timeout_value={timeout}",
             )
@@ -179,7 +226,7 @@ def send_with_stop_and_wait(
                 event="timeout",
                 packet_type=packet_name,
                 sequence_number=sequence_number,
-                attempt=attempts,
+                attempt=attempt,
                 payload_bytes=len(payload),
                 details=f"UDP receive reset while waiting for ACK; treated as timeout; error={exc}",
             )
@@ -188,7 +235,7 @@ def send_with_stop_and_wait(
                 event="invalid_ack",
                 packet_type=packet_name,
                 sequence_number=sequence_number,
-                attempt=attempts,
+                attempt=attempt,
                 details=str(exc),
             )
 
@@ -196,11 +243,109 @@ def send_with_stop_and_wait(
         event="packet_failed",
         packet_type=packet_name,
         sequence_number=sequence_number,
-        attempt=attempts,
+        attempt=max_retries + 1,
         payload_bytes=len(payload),
         details=f"Exceeded maximum retransmission count: {max_retries}",
     )
-    return False, attempts - 1, None, {}
+    return False, max_retries + 1, {}
+
+
+def send_metadata(
+    sock: socket.socket,
+    server_address: tuple[str, int],
+    file_path: str,
+    total_packets: int,
+    file_hash: str,
+    file_size: int,
+    timeout: float,
+    max_retries: int,
+    loss_rate: float,
+    delay_ms: float,
+    logger: EventLogger,
+) -> tuple[bool, int]:
+    # START paketi dosya adı, toplam paket sayısı ve beklenen SHA-256 bilgisini taşır.
+    start_payload = build_start_payload(file_path, total_packets, file_hash, file_size)
+    ok, retransmissions, _ = send_reliable_packet(
+        sock,
+        server_address,
+        TYPE_START,
+        0,
+        total_packets,
+        start_payload,
+        TYPE_ACK,
+        timeout,
+        max_retries,
+        loss_rate,
+        delay_ms,
+        logger,
+    )
+    return ok, retransmissions
+
+
+def send_data_packets(
+    sock: socket.socket,
+    server_address: tuple[str, int],
+    chunks: list[bytes],
+    timeout: float,
+    max_retries: int,
+    loss_rate: float,
+    delay_ms: float,
+    logger: EventLogger,
+) -> tuple[bool, int, int]:
+    total_packets = len(chunks)
+    total_retransmissions = 0
+    successful_packets = 0
+
+    for sequence_number, chunk in enumerate(chunks):
+        # Sequence number, alıcının parçaları doğru sırada birleştirmesini sağlar.
+        ok, retransmissions, _ = send_reliable_packet(
+            sock,
+            server_address,
+            TYPE_DATA,
+            sequence_number,
+            total_packets,
+            chunk,
+            TYPE_ACK,
+            timeout,
+            max_retries,
+            loss_rate,
+            delay_ms,
+            logger,
+        )
+        total_retransmissions += retransmissions
+        if not ok:
+            return False, successful_packets, total_retransmissions
+        successful_packets += 1
+
+    return True, successful_packets, total_retransmissions
+
+
+def finish_transfer(
+    sock: socket.socket,
+    server_address: tuple[str, int],
+    total_packets: int,
+    file_hash: str,
+    timeout: float,
+    max_retries: int,
+    loss_rate: float,
+    delay_ms: float,
+    logger: EventLogger,
+) -> tuple[bool, int, dict[str, str]]:
+    # FIN paketi sonunda sunucudan SHA-256 bütünlük sonucunu alır.
+    return send_reliable_packet(
+        sock,
+        server_address,
+        TYPE_FIN,
+        total_packets,
+        total_packets,
+        file_hash.encode("ascii"),
+        TYPE_FIN_ACK,
+        timeout,
+        max_retries,
+        loss_rate,
+        delay_ms,
+        logger,
+    )
 
 
 def send_file(
@@ -212,47 +357,51 @@ def send_file(
     loss_rate: float,
     max_retries: int,
     log_dir: str,
+    delay_ms: float = 0.0,
 ) -> bool:
     if not os.path.exists(file_path):
         raise FileNotFoundError(file_path)
 
     logger = EventLogger(log_dir, prefix="client_transfer")
     server_address = (server_ip, server_port)
+
+    # Dosya paketlere bölünür; her parça bir DATA paketinin payload alanıdır.
     chunks = split_file(file_path, packet_size)
     total_packets = len(chunks)
     file_hash = file_sha256(file_path)
     file_size = os.path.getsize(file_path)
-    start_payload = build_start_payload(file_path, total_packets, file_hash, file_size)
 
+    # UDP socket kurulumu: güvenilirlik mekanizması uygulama katmanında elle sağlanır.
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.settimeout(timeout)
+    start_time = time.time()
 
     successful_packets = 0
     failed_packets = 0
     total_retransmissions = 0
-    start_time = time.time()
 
     logger.log(
         event="transfer_started",
         details=(
             f"server={server_ip}:{server_port}; file={file_path}; "
             f"size={file_size}; packet_size={packet_size}; timeout={timeout}; "
-            f"loss_rate={loss_rate}; max_retries={max_retries}"
+            f"loss_rate={loss_rate}; max_retries={max_retries}; "
+            f"arq=stop-and-wait; delay_ms={delay_ms}"
         ),
     )
 
     try:
-        ok, retransmissions, _, _ = send_with_stop_and_wait(
+        ok, retransmissions = send_metadata(
             sock,
             server_address,
-            TYPE_START,
-            0,
+            file_path,
             total_packets,
-            start_payload,
-            TYPE_ACK,
+            file_hash,
+            file_size,
             timeout,
             max_retries,
             loss_rate,
+            delay_ms,
             logger,
         )
         total_retransmissions += retransmissions
@@ -260,38 +409,30 @@ def send_file(
             failed_packets += 1
             return False
 
-        for sequence_number, chunk in enumerate(chunks):
-            ok, retransmissions, _, _ = send_with_stop_and_wait(
-                sock,
-                server_address,
-                TYPE_DATA,
-                sequence_number,
-                total_packets,
-                chunk,
-                TYPE_ACK,
-                timeout,
-                max_retries,
-                loss_rate,
-                logger,
-            )
-            total_retransmissions += retransmissions
-            if not ok:
-                failed_packets += 1
-                return False
-            successful_packets += 1
-
-        fin_payload = file_hash.encode("ascii")
-        ok, retransmissions, _, fin_ack_details = send_with_stop_and_wait(
+        ok, successful_packets, retransmissions = send_data_packets(
             sock,
             server_address,
-            TYPE_FIN,
-            total_packets,
-            total_packets,
-            fin_payload,
-            TYPE_FIN_ACK,
+            chunks,
             timeout,
             max_retries,
             loss_rate,
+            delay_ms,
+            logger,
+        )
+        total_retransmissions += retransmissions
+        if not ok:
+            failed_packets += 1
+            return False
+
+        ok, retransmissions, fin_ack_details = finish_transfer(
+            sock,
+            server_address,
+            total_packets,
+            file_hash,
+            timeout,
+            max_retries,
+            loss_rate,
+            delay_ms,
             logger,
         )
         total_retransmissions += retransmissions
@@ -303,6 +444,8 @@ def send_file(
         integrity_ok = fin_ack_details.get("integrity_ok", "UNKNOWN")
         expected_hash = fin_ack_details.get("expected_hash", file_hash)
         actual_hash = fin_ack_details.get("actual_hash", "UNKNOWN")
+
+        # Loglar analyzer.py tarafından throughput/goodput ve hata oranı hesaplamak için kullanılır.
         logger.log(
             event="transfer_completed",
             payload_bytes=file_size,
@@ -334,7 +477,7 @@ def send_file(
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="NetProbe UDP file transfer client")
+    parser = argparse.ArgumentParser(description="NetProbe UDP Stop-and-Wait file transfer client")
     parser.add_argument("--server-ip", default=DEFAULT_SERVER_IP)
     parser.add_argument("--server-port", type=int, default=DEFAULT_SERVER_PORT)
     parser.add_argument("--file", required=True, help="Path of the file to send")
@@ -342,6 +485,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT)
     parser.add_argument("--loss-rate", type=float, default=DEFAULT_LOSS_RATE)
     parser.add_argument("--max-retries", type=int, default=DEFAULT_MAX_RETRIES)
+    parser.add_argument("--delay-ms", type=float, default=0.0, help="Artificial delay before sending each packet")
     parser.add_argument("--log-dir", default=LOGS_DIR)
     return parser
 
@@ -357,6 +501,7 @@ def main() -> None:
         loss_rate=args.loss_rate,
         max_retries=args.max_retries,
         log_dir=args.log_dir,
+        delay_ms=args.delay_ms,
     )
     if success:
         print("Transfer completed successfully.")
