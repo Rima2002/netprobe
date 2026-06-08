@@ -273,6 +273,3 @@ certutil -hashfile received_files\medium.bin SHA256
 https://github.com/Rima2002/netprobe
 ```
 
-## Teslim Notu
-
-Final teslim için `.zip` içinde kaynak kodlar, README, teknik rapor PDF'i, GitHub bağlantısı, örnek loglar, deney sonuçları, grafikler ve test dosyaları bulunmalıdır. Teknik raporda yalnızca grafik verilmemeli; paket boyutu, timeout ve kayıp oranının protokol davranışına etkisi retransmission, bekleme süresi, goodput ve completion time açısından yorumlanmalıdır.
