@@ -81,6 +81,8 @@ def maybe_delay(delay_ms: float) -> None:
 
 
 def parse_ack_details(ack_text: str) -> dict[str, str]:
+    """ACK payload içindeki key=value alanlarını sözlüğe çevirir."""
+
     details: dict[str, str] = {}
     for part in ack_text.split(";"):
         if "=" not in part:
@@ -99,7 +101,6 @@ def wait_for_matching_ack(
     """Beklenen sequence number için doğru ACK paketini bekler."""
 
     while True:
-        # ACK bekleme socket timeout ile sınırlıdır; timeout olursa üst katman yeniden gönderir.
         raw_ack, _ = sock.recvfrom(HEADER_SIZE + 1024)
         ack = parse_packet(raw_ack)
 
@@ -263,7 +264,8 @@ def send_metadata(
     delay_ms: float,
     logger: EventLogger,
 ) -> tuple[bool, int]:
-    # START paketi dosya adı, toplam paket sayısı ve beklenen SHA-256 bilgisini taşır.
+    """START metadata paketini gönderir."""
+
     start_payload = build_start_payload(file_path, total_packets, file_hash, file_size)
     ok, retransmissions, _ = send_reliable_packet(
         sock,
@@ -292,12 +294,13 @@ def send_data_packets(
     delay_ms: float,
     logger: EventLogger,
 ) -> tuple[bool, int, int]:
+    """Dosya parçalarını sequence number sırasıyla DATA paketi olarak gönderir."""
+
     total_packets = len(chunks)
     total_retransmissions = 0
     successful_packets = 0
 
     for sequence_number, chunk in enumerate(chunks):
-        # Sequence number, alıcının parçaları doğru sırada birleştirmesini sağlar.
         ok, retransmissions, _ = send_reliable_packet(
             sock,
             server_address,
@@ -331,7 +334,8 @@ def finish_transfer(
     delay_ms: float,
     logger: EventLogger,
 ) -> tuple[bool, int, dict[str, str]]:
-    # FIN paketi sonunda sunucudan SHA-256 bütünlük sonucunu alır.
+    """FIN paketini gönderir ve sunucunun bütünlük sonucunu alır."""
+
     return send_reliable_packet(
         sock,
         server_address,
@@ -359,19 +363,19 @@ def send_file(
     log_dir: str,
     delay_ms: float = 0.0,
 ) -> bool:
+    """Dosyayı UDP üzerinde Stop-and-Wait ARQ ile sunucuya aktarır."""
+
     if not os.path.exists(file_path):
         raise FileNotFoundError(file_path)
 
     logger = EventLogger(log_dir, prefix="client_transfer")
     server_address = (server_ip, server_port)
 
-    # Dosya paketlere bölünür; her parça bir DATA paketinin payload alanıdır.
     chunks = split_file(file_path, packet_size)
     total_packets = len(chunks)
     file_hash = file_sha256(file_path)
     file_size = os.path.getsize(file_path)
 
-    # UDP socket kurulumu: güvenilirlik mekanizması uygulama katmanında elle sağlanır.
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.settimeout(timeout)
     start_time = time.time()
@@ -445,7 +449,7 @@ def send_file(
         expected_hash = fin_ack_details.get("expected_hash", file_hash)
         actual_hash = fin_ack_details.get("actual_hash", "UNKNOWN")
 
-        # Loglar analyzer.py tarafından throughput/goodput ve hata oranı hesaplamak için kullanılır.
+        # Analyzer, throughput/goodput ve hata oranlarını bu kapanış kaydından çıkarır.
         logger.log(
             event="transfer_completed",
             payload_bytes=file_size,
@@ -473,19 +477,19 @@ def send_file(
         )
         csv_path, json_path = logger.save()
         sock.close()
-        print(f"Loglar kaydedildi: {csv_path} ve {json_path}")
+        print(f"Logs saved: {csv_path} and {json_path}")
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="NetProbe UDP Stop-and-Wait dosya aktarım istemcisi")
+    parser = argparse.ArgumentParser(description="NetProbe UDP Stop-and-Wait file transfer client")
     parser.add_argument("--server-ip", default=DEFAULT_SERVER_IP)
     parser.add_argument("--server-port", type=int, default=DEFAULT_SERVER_PORT)
-    parser.add_argument("--file", required=True, help="Gönderilecek dosyanın yolu")
+    parser.add_argument("--file", required=True, help="Path of the file to send")
     parser.add_argument("--packet-size", type=int, default=DEFAULT_PACKET_SIZE)
     parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT)
     parser.add_argument("--loss-rate", type=float, default=DEFAULT_LOSS_RATE)
     parser.add_argument("--max-retries", type=int, default=DEFAULT_MAX_RETRIES)
-    parser.add_argument("--delay-ms", type=float, default=0.0, help="Her paketten önce uygulanacak yapay gecikme")
+    parser.add_argument("--delay-ms", type=float, default=0.0, help="Artificial delay before each packet")
     parser.add_argument("--log-dir", default=LOGS_DIR)
     return parser
 
@@ -504,9 +508,9 @@ def main() -> None:
         delay_ms=args.delay_ms,
     )
     if success:
-        print("Aktarım başarıyla tamamlandı.")
+        print("Transfer completed successfully.")
     else:
-        raise SystemExit("Aktarım başarısız oldu.")
+        raise SystemExit("Transfer failed.")
 
 
 if __name__ == "__main__":

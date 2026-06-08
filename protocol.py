@@ -30,8 +30,7 @@ TYPE_NAMES = {
     TYPE_ERROR: "ERROR",
 }
 
-# packet_type: 1 byte, sequence_number: 4 byte, total_packets: 4 byte,
-# payload_length: 2 byte, checksum: 32 byte SHA-256 özeti.
+# Header layout: packet_type, sequence_number, total_packets, payload_length, checksum.
 HEADER_FORMAT = "!BIIH32s"
 HEADER_SIZE = struct.calcsize(HEADER_FORMAT)
 MAX_UDP_PAYLOAD = 65507
@@ -72,7 +71,7 @@ def make_packet(
     """NetProbe başlık formatını kullanarak ikili UDP paketi oluşturur."""
 
     if len(payload) > MAX_UDP_PAYLOAD - HEADER_SIZE:
-        raise ValueError("Payload UDP datagramı için çok büyük")
+        raise ValueError("Payload is too large for one UDP datagram")
 
     checksum = checksum_payload(payload)
     header = struct.pack(
@@ -90,7 +89,7 @@ def parse_packet(raw_packet: bytes) -> Packet:
     """İkili paketi çözer ve bildirilen payload uzunluğunu doğrular."""
 
     if len(raw_packet) < HEADER_SIZE:
-        raise ValueError("Paket protokol başlığından daha küçük")
+        raise ValueError("Packet is smaller than the protocol header")
 
     header = raw_packet[:HEADER_SIZE]
     payload = raw_packet[HEADER_SIZE:]
@@ -99,7 +98,7 @@ def parse_packet(raw_packet: bytes) -> Packet:
     )
 
     if payload_length != len(payload):
-        raise ValueError("Başlıktaki payload uzunluğu paket boyutuyla eşleşmiyor")
+        raise ValueError("Header payload length does not match packet size")
 
     return Packet(
         packet_type=packet_type,
@@ -121,11 +120,11 @@ def split_file(path: str, chunk_size: int) -> list[bytes]:
     """Dosyayı UDP payload alanına sığacak parçalara böler."""
 
     if chunk_size <= 0:
-        raise ValueError("Paket boyutu sıfırdan büyük olmalıdır")
+        raise ValueError("Packet size must be greater than zero")
 
     max_payload = MAX_UDP_PAYLOAD - HEADER_SIZE
     if chunk_size > max_payload:
-        raise ValueError(f"Paket boyutu en fazla {max_payload} byte olmalıdır")
+        raise ValueError(f"Packet size must be at most {max_payload} bytes")
 
     chunks: list[bytes] = []
     with open(path, "rb") as file_obj:

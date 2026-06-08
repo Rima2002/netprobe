@@ -19,6 +19,8 @@ except ImportError:
 
 
 def read_events(log_path: str) -> list[dict[str, Any]]:
+    """CSV log dosyasındaki olay satırlarını okur."""
+
     with open(log_path, newline="", encoding="utf-8") as csv_file:
         return list(csv.DictReader(csv_file))
 
@@ -43,6 +45,8 @@ def parse_details(details: str) -> dict[str, str]:
 
 
 def parse_integrity(value: Any) -> bool | None:
+    """Loglarda farklı biçimlerde gelebilen bütünlük sonucunu bool değere çevirir."""
+
     normalized = str(value).strip().lower()
     if normalized in {"true", "1", "yes", "ok", "passed"}:
         return True
@@ -52,9 +56,11 @@ def parse_integrity(value: Any) -> bool | None:
 
 
 def analyze_log(log_path: str) -> dict[str, float | int | str]:
+    """Tek bir istemci veya sunucu logundan performans metriklerini çıkarır."""
+
     events = read_events(log_path)
     if not events:
-        raise ValueError(f"{log_path} içinde olay bulunamadı")
+        raise ValueError(f"No events found in {log_path}")
 
     timestamps = [as_float(row["timestamp"]) for row in events if row.get("timestamp")]
     completion_time = max(timestamps) - min(timestamps) if timestamps else 0.0
@@ -74,8 +80,7 @@ def analyze_log(log_path: str) -> dict[str, float | int | str]:
         and "ack_for=DATA" in row.get("details", "")
     ]
 
-    # Throughput: retransmission ve yapay kayıp denemeleri dahil gönderilmeye çalışılan DATA byte miktarı.
-    # Goodput: alıcıda başarıyla yeniden oluşturulan gerçek dosya byte miktarı.
+    # Throughput yeniden gönderimler dahil denenen DATA byte miktarına, goodput gerçek dosya boyutuna dayanır.
     data_payload_bytes_attempted = sum(
         int(as_float(row.get("payload_bytes"))) for row in data_send_events + simulated_loss_events
     )
@@ -84,11 +89,21 @@ def analyze_log(log_path: str) -> dict[str, float | int | str]:
     original_file_bytes = 0
     if completion_events:
         completion_details = parse_details(completion_events[-1].get("details", ""))
-        original_file_bytes = int(as_float(completion_details.get("original_file_size"), completion_events[-1].get("payload_bytes")))
+        original_file_bytes = int(
+            as_float(
+                completion_details.get("original_file_size"),
+                completion_events[-1].get("payload_bytes"),
+            )
+        )
         completion_time = as_float(completion_details.get("total_transfer_time"), completion_time)
     elif reconstruction_events:
         reconstruction_details = parse_details(reconstruction_events[-1].get("details", ""))
-        original_file_bytes = int(as_float(reconstruction_details.get("original_file_size"), reconstruction_events[-1].get("payload_bytes")))
+        original_file_bytes = int(
+            as_float(
+                reconstruction_details.get("original_file_size"),
+                reconstruction_events[-1].get("payload_bytes"),
+            )
+        )
         completion_time = as_float(reconstruction_details.get("total_transfer_time"), completion_time)
     else:
         original_file_bytes = data_payload_bytes_attempted
@@ -177,58 +192,113 @@ def save_metrics(metrics: dict[str, float | int | str], output_dir: str) -> tupl
 
 
 def plot_experiment_results(results_csv: str, output_dir: str) -> list[str]:
+    """Deney CSV dosyasından okunabilir grafikler üretir."""
+
     os.makedirs(output_dir, exist_ok=True)
     data = pd.read_csv(results_csv)
     graph_paths: list[str] = []
 
     graph_configs = [
-        (
-            "packet_size",
-            "packet_size",
-            "Paket Boyutu (byte)",
-            ["goodput", "throughput"],
-            "Byte / saniye",
-            "Paket Boyutu - Throughput ve Goodput",
-            "packet_size_results.png",
-        ),
-        (
-            "timeout",
-            "timeout",
-            "Timeout (saniye)",
-            ["retransmission_count", "completion_time"],
-            "Sayı / saniye",
-            "Timeout - Yeniden Gönderim Sayısı ve Tamamlanma Süresi",
-            "timeout_results.png",
-        ),
-        (
-            "loss_rate",
-            "loss_rate",
-            "Yapay Kayıp Oranı",
-            ["goodput", "throughput", "retransmission_rate"],
-            "Byte/s veya oran",
-            "Kayıp Oranı - Goodput, Throughput ve Yeniden Gönderim Oranı",
-            "loss_rate_results.png",
-        ),
+        {
+            "scenario": "file_size",
+            "x_column": "file_size",
+            "x_label": "File Size (bytes)",
+            "y_columns": ["throughput", "goodput"],
+            "y_label": "Bytes / second",
+            "title": "File Size vs Throughput and Goodput",
+            "filename": "file_size_throughput_goodput.png",
+        },
+        {
+            "scenario": "file_size",
+            "x_column": "file_size",
+            "x_label": "File Size (bytes)",
+            "y_columns": ["completion_time"],
+            "y_label": "Completion Time (seconds)",
+            "title": "File Size vs Completion Time",
+            "filename": "file_size_completion_time.png",
+        },
+        {
+            "scenario": "packet_size",
+            "x_column": "packet_size",
+            "x_label": "Packet Size (bytes)",
+            "y_columns": ["throughput", "goodput"],
+            "y_label": "Bytes / second",
+            "title": "Packet Size vs Throughput and Goodput",
+            "filename": "packet_size_throughput_goodput.png",
+            "note": "With no artificial loss, goodput and throughput may overlap.",
+        },
+        {
+            "scenario": "packet_size",
+            "x_column": "packet_size",
+            "x_label": "Packet Size (bytes)",
+            "y_columns": ["completion_time"],
+            "y_label": "Completion Time (seconds)",
+            "title": "Packet Size vs Completion Time",
+            "filename": "packet_size_completion_time.png",
+        },
+        {
+            "scenario": "timeout",
+            "x_column": "timeout",
+            "x_label": "Timeout (seconds)",
+            "y_columns": ["retransmission_count"],
+            "y_label": "Retransmitted Packets",
+            "title": "Timeout vs Retransmission Count",
+            "filename": "timeout_retransmission_count.png",
+        },
+        {
+            "scenario": "timeout",
+            "x_column": "timeout",
+            "x_label": "Timeout (seconds)",
+            "y_columns": ["completion_time"],
+            "y_label": "Completion Time (seconds)",
+            "title": "Timeout vs Completion Time",
+            "filename": "timeout_completion_time.png",
+        },
+        {
+            "scenario": "loss_rate",
+            "x_column": "loss_rate",
+            "x_label": "Artificial Loss Rate",
+            "y_columns": ["throughput", "goodput"],
+            "y_label": "Bytes / second",
+            "title": "Loss Rate vs Throughput and Goodput",
+            "filename": "loss_rate_throughput_goodput.png",
+        },
+        {
+            "scenario": "loss_rate",
+            "x_column": "loss_rate",
+            "x_label": "Artificial Loss Rate",
+            "y_columns": ["retransmission_rate"],
+            "y_label": "Retransmission Rate",
+            "title": "Loss Rate vs Retransmission Rate",
+            "filename": "loss_rate_retransmission_rate.png",
+        },
     ]
 
-    for scenario_name, x_column, x_label, y_columns, y_label, title, filename in graph_configs:
+    for config in graph_configs:
+        scenario_name = config["scenario"]
+        x_column = config["x_column"]
+        y_columns = config["y_columns"]
         subset = data[data["scenario"] == scenario_name].sort_values(by=x_column)
         if subset.empty:
             continue
 
-        plt.figure(figsize=(9, 5))
+        plt.figure(figsize=(9, 5.5))
         for y_column in y_columns:
             label = y_column.replace("_", " ").title()
             plt.plot(subset[x_column], subset[y_column], marker="o", label=label)
-        plt.xlabel(x_label)
-        plt.ylabel(y_label)
-        plt.title(f"NetProbe: {title}")
+        plt.xlabel(config["x_label"])
+        plt.ylabel(config["y_label"])
+        plt.title(config["title"])
         plt.grid(True, alpha=0.3)
         plt.legend()
-        plt.tight_layout()
+        if config.get("note"):
+            plt.figtext(0.5, 0.01, config["note"], ha="center", fontsize=9)
+            plt.tight_layout(rect=(0, 0.04, 1, 1))
+        else:
+            plt.tight_layout()
 
-        graph_path = os.path.join(output_dir, filename)
-        plt.savefig(graph_path)
+        graph_path = os.path.join(output_dir, config["filename"])
+        plt.savefig(graph_path, dpi=300)
         plt.close()
         graph_paths.append(graph_path)
 
@@ -262,9 +332,28 @@ def generate_technical_interpretation(results_csv: str, output_dir: str) -> str:
         "NetProbe Teknik Deney Yorumu",
         "=============================",
         "",
-        "Bu yorumlar, UDP üzerinde Stop-and-Wait ARQ kullanan NetProbe deney çıktılarından otomatik üretilmiştir.",
+        "Bu yorumlar, UDP üzerinde Stop-and-Wait ARQ kullanan NetProbe deney çıktılarına dayanır.",
         "",
     ]
+
+    file_size_data = data[data["scenario"] == "file_size"].sort_values("file_size")
+    if len(file_size_data) >= 2:
+        first = file_size_data.iloc[0]
+        last = file_size_data.iloc[-1]
+        lines.extend(
+            [
+                "1. Dosya boyutunun etkisi",
+                (
+                    f"Dosya boyutu {int(first['file_size'])} bayttan {int(last['file_size'])} bayta çıktığında "
+                    "completion time "
+                    f"{metric_change_text(float(first['completion_time']), float(last['completion_time']), ' s')}. "
+                    "Stop-and-Wait ARQ her DATA paketi için ACK beklediğinden daha büyük dosyalar daha fazla "
+                    "paket turu oluşturur. Bu nedenle toplam aktarım süresi artarken throughput/goodput değerleri "
+                    "paket sayısı ve ACK bekleme maliyetinden etkilenir."
+                ),
+                "",
+            ]
+        )
 
     packet_data = data[data["scenario"] == "packet_size"].sort_values("packet_size")
     if len(packet_data) >= 2:
@@ -272,7 +361,7 @@ def generate_technical_interpretation(results_csv: str, output_dir: str) -> str:
         last = packet_data.iloc[-1]
         lines.extend(
             [
-                "1. Paket boyutunun etkisi",
+                "2. Paket boyutunun etkisi",
                 (
                     f"Paket boyutu {int(first['packet_size'])} bayttan {int(last['packet_size'])} bayta çıktığında "
                     f"goodput {metric_change_text(float(first['goodput']), float(last['goodput']), ' B/s')}. "
@@ -290,13 +379,14 @@ def generate_technical_interpretation(results_csv: str, output_dir: str) -> str:
         last = timeout_data.iloc[-1]
         lines.extend(
             [
-                "2. Timeout değerinin etkisi",
+                "3. Timeout değerinin etkisi",
                 (
                     f"Timeout {float(first['timeout']):.2f} saniyeden {float(last['timeout']):.2f} saniyeye çıktığında "
-                    f"retransmission sayısı {metric_change_text(float(first['retransmission_count']), float(last['retransmission_count']))}. "
+                    "retransmission sayısı "
+                    f"{metric_change_text(float(first['retransmission_count']), float(last['retransmission_count']))}. "
                     "Timeout çok küçük seçilirse ACK yolda olsa bile paket kaybolmuş gibi kabul edilebilir ve gereksiz "
-                    "yeniden gönderimler oluşabilir. Timeout çok büyük seçilirse gerçek kayıp durumunda istemci daha uzun "
-                    "bekler ve completion time artabilir."
+                    "yeniden gönderimler oluşabilir. Timeout çok büyük seçilirse gerçek kayıp durumunda "
+                    "istemci daha uzun bekler ve completion time artabilir."
                 ),
                 "",
             ]
@@ -308,12 +398,15 @@ def generate_technical_interpretation(results_csv: str, output_dir: str) -> str:
         last = loss_data.iloc[-1]
         lines.extend(
             [
-                "3. Yapay paket kaybının etkisi",
+                "4. Yapay paket kaybının etkisi",
                 (
-                    f"Kayıp oranı {float(first['loss_rate']):.2f} değerinden {float(last['loss_rate']):.2f} değerine çıktığında "
-                    f"retransmission rate {metric_change_text(float(first['retransmission_rate']), float(last['retransmission_rate']))}; "
+                    f"Kayıp oranı {float(first['loss_rate']):.2f} değerinden "
+                    f"{float(last['loss_rate']):.2f} değerine çıktığında "
+                    "retransmission rate "
+                    f"{metric_change_text(float(first['retransmission_rate']), float(last['retransmission_rate']))}; "
                     f"goodput ise {metric_change_text(float(first['goodput']), float(last['goodput']), ' B/s')}. "
-                    "Kayıp arttıkça istemci daha fazla timeout yaşar ve aynı sequence number için yeniden gönderim yapar. "
+                    "Kayıp arttıkça istemci daha fazla timeout yaşar ve aynı sequence number için "
+                    "yeniden gönderim yapar. "
                     "Bu durum aktarılan toplam veri denemelerini artırırken faydalı veri hızını düşürebilir."
                 ),
                 "",
@@ -322,7 +415,7 @@ def generate_technical_interpretation(results_csv: str, output_dir: str) -> str:
 
     lines.extend(
         [
-            "4. Bütünlük ve duplicate paketler",
+            "5. Bütünlük ve duplicate paketler",
             (
                 "Her aktarım sonunda sunucuda oluşturulan dosyanın SHA-256 değeri istemcinin gönderdiği hash ile "
                 "karşılaştırılır. integrity_ok=True sonucu dosyanın eksiksiz ve doğru sırada yeniden oluşturulduğunu "
@@ -340,9 +433,9 @@ def generate_technical_interpretation(results_csv: str, output_dir: str) -> str:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="NetProbe loglarını analiz eder")
-    parser.add_argument("--log", help="Analiz edilecek istemci CSV logu")
-    parser.add_argument("--results-csv", help="Grafik üretilecek deney sonuçları CSV dosyası")
+    parser = argparse.ArgumentParser(description="Analyze NetProbe logs and experiment results")
+    parser.add_argument("--log", help="Client CSV log to analyze")
+    parser.add_argument("--results-csv", help="Experiment results CSV used for graph generation")
     parser.add_argument("--output-dir", default=RESULTS_DIR)
     return parser
 
@@ -351,23 +444,23 @@ def main() -> None:
     args = build_parser().parse_args()
 
     if not args.log and not args.results_csv:
-        raise SystemExit("Metrik için --log veya grafik için --results-csv verin.")
+        raise SystemExit("Use --log for metrics or --results-csv for graphs.")
 
     if args.log:
         metrics = analyze_log(args.log)
         csv_path, json_path = save_metrics(metrics, args.output_dir)
         print(json.dumps(metrics, indent=2))
-        print(f"Analiz kaydedildi: {csv_path} ve {json_path}")
+        print(f"Analysis saved: {csv_path} and {json_path}")
 
     if args.results_csv:
         json_path = save_experiment_results_json(args.results_csv, args.output_dir)
         graph_paths = plot_experiment_results(args.results_csv, args.output_dir)
         interpretation_path = generate_technical_interpretation(args.results_csv, args.output_dir)
-        print(f"Deney JSON çıktısı kaydedildi: {json_path}")
-        print("Grafikler oluşturuldu:")
+        print(f"Experiment JSON saved: {json_path}")
+        print("Graphs generated:")
         for graph_path in graph_paths:
-            print(f"  {graph_path}")
-        print(f"Teknik yorum kaydedildi: {interpretation_path}")
+            print(f"- {os.path.relpath(graph_path).replace(os.sep, '/')}")
+        print(f"Technical interpretation saved: {interpretation_path}")
 
 
 if __name__ == "__main__":

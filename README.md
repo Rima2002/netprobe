@@ -50,9 +50,14 @@ results/
   experiment_results.csv
   experiment_results.json
   technical_interpretation.txt
-  packet_size_results.png
-  timeout_results.png
-  loss_rate_results.png
+  file_size_throughput_goodput.png
+  file_size_completion_time.png
+  packet_size_throughput_goodput.png
+  packet_size_completion_time.png
+  timeout_retransmission_count.png
+  timeout_completion_time.png
+  loss_rate_throughput_goodput.png
+  loss_rate_retransmission_rate.png
 ```
 
 Eski timestamp'li loglar ve tekrar eden deney grafikleri `archive/` altina tasinabilir. `logs/` klasoru demo ve rapor icin okunabilir ornek loglari tutar.
@@ -169,6 +174,31 @@ Hesaplanan metrikler:
 - `duplicate_count`
 - `integrity_ok`
 
+## Olay Loglari
+
+Aktarim sirasinda istemci ve sunucu olaylari `logger.py` ile CSV/JSON olarak kaydedilir. Ornek loglar:
+
+```text
+logs/sample_client_log.csv
+logs/sample_server_log.csv
+```
+
+Loglarda takip edilen temel olaylar:
+
+- `transfer_started`: aktarim parametreleri ve dosya bilgileri
+- `packet_sent`: gonderilen START/DATA/FIN paketleri
+- `ack_received`: istemcinin aldigi ACK/FIN_ACK cevaplari
+- `timeout`: ACK bekleme suresinin dolmasi
+- `simulated_packet_loss`: deney icin yapay olarak gonderilmeyen DATA paketi
+- `packet_failed`: maksimum yeniden gonderim denemesinden sonra basarisiz paket
+- `packet_received`: sunucunun aldigi paketler
+- `duplicate_packet_ignored`: tekrar gelen DATA paketinin ikinci kez yazilmamasi
+- `file_reconstructed`: sunucuda dosyanin yeniden olusturulmasi
+- `transfer_completed`: aktarimin tamamlanmasi ve SHA-256 sonucunun kaydedilmesi
+
+Bu olaylar; timeout sayisi, retransmission count/rate, RTT, packet loss rate, throughput,
+goodput ve completion time metriklerinin hesaplanmasi icin kullanilir.
+
 ## Deneyleri Calistirma
 
 ```cmd
@@ -177,6 +207,7 @@ python experiments.py
 
 Deneyler su senaryolari uretir:
 
+- farkli dosya boyutlari
 - farkli paket boyutlari
 - farkli timeout degerleri
 - farkli yapay kayip oranlari
@@ -188,12 +219,30 @@ Deney ciktilari:
 results/experiment_results.csv
 results/experiment_results.json
 results/technical_interpretation.txt
-results/packet_size_results.png
-results/timeout_results.png
-results/loss_rate_results.png
+results/file_size_throughput_goodput.png
+results/file_size_completion_time.png
+results/packet_size_throughput_goodput.png
+results/packet_size_completion_time.png
+results/timeout_retransmission_count.png
+results/timeout_completion_time.png
+results/loss_rate_throughput_goodput.png
+results/loss_rate_retransmission_rate.png
 ```
 
+Grafikler farkli birimlerdeki metrikleri ayni y ekseninde karistirmayacak sekilde ayrilmistir:
+
+- `file_size_throughput_goodput.png`: kucuk, orta ve buyuk dosya aktariminda throughput/goodput degisimini gosterir.
+- `file_size_completion_time.png`: dosya boyutunun toplam aktarim suresine etkisini gosterir.
+- `packet_size_throughput_goodput.png`: paket boyutu arttikca throughput ve goodput degisimini gosterir. Kayip olmadiginda iki metrik birbirine cok yakin olabilir.
+- `packet_size_completion_time.png`: paket boyutunun toplam aktarim suresine etkisini gosterir.
+- `timeout_retransmission_count.png`: timeout degerinin yeniden gonderilen paket sayisina etkisini gosterir.
+- `timeout_completion_time.png`: timeout degerinin aktarim tamamlanma suresine etkisini gosterir.
+- `loss_rate_throughput_goodput.png`: yapay kayip oraninin throughput ve goodput uzerindeki etkisini gosterir.
+- `loss_rate_retransmission_rate.png`: yapay kayip oraninin retransmission rate uzerindeki etkisini ayri bir oranda gosterir.
+
 `technical_interpretation.txt`, rapora dogrudan eklenebilecek kisa teknik Turkce yorumlar icerir.
+Bu yorumlar deney parametrelerinin retransmission, bekleme suresi, goodput ve completion time
+uzerindeki etkisini protokol davranisiyla iliskilendirir.
 
 ## Unit Testler
 
@@ -229,4 +278,7 @@ https://github.com/Rima2002/netprobe
 
 ## Teslim Notu
 
-Final teslim icin `.zip` icinde kaynak kodlar, README, teknik rapor PDF'i, gerekli log/sonuc/grafik ornekleri ve test dosyalari bulunmalidir. Teknik raporda yalnizca grafik verilmemeli; paket boyutu, timeout ve kayip oraninin protokol davranisina etkisi teknik olarak yorumlanmalidir.
+Final teslim icin `.zip` icinde kaynak kodlar, README, teknik rapor PDF'i, GitHub baglantisi,
+ornek loglar, deney sonuclari, grafikler ve test dosyalari bulunmalidir. Teknik raporda yalnizca
+grafik verilmemeli; paket boyutu, timeout ve kayip oraninin protokol davranisina etkisi
+retransmission, bekleme suresi, goodput ve completion time acisindan yorumlanmalidir.

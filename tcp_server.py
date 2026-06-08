@@ -11,11 +11,11 @@ import time
 try:
     from .config import DEFAULT_SERVER_PORT, LOGS_DIR, RECEIVED_FILES_DIR
     from .logger import EventLogger
-    from .protocol import file_sha256, split_file
+    from .protocol import file_sha256
 except ImportError:
     from config import DEFAULT_SERVER_PORT, LOGS_DIR, RECEIVED_FILES_DIR
     from logger import EventLogger
-    from protocol import file_sha256, split_file
+    from protocol import file_sha256
 
 
 def recv_exact(sock: socket.socket, size: int) -> bytes:
@@ -23,7 +23,7 @@ def recv_exact(sock: socket.socket, size: int) -> bytes:
     while len(buffer) < size:
         chunk = sock.recv(size - len(buffer))
         if not chunk:
-            raise ConnectionError("Veri alınırken bağlantı kapandı")
+            raise ConnectionError("Connection closed while receiving data")
         buffer.extend(chunk)
     return bytes(buffer)
 
@@ -33,7 +33,7 @@ def send_exact(sock: socket.socket, data: bytes) -> None:
     while total_sent < len(data):
         sent = sock.send(data[total_sent:])
         if sent == 0:
-            raise ConnectionError("Socket bağlantısı koptu")
+            raise ConnectionError("Socket connection was closed")
         total_sent += sent
 
 
@@ -46,7 +46,7 @@ def run_server(host: str, port: int, output_dir: str, log_dir: str, once: bool) 
     sock.listen(1)
 
     logger.log(event="server_started", details=f"host={host}; port={port}")
-    print(f"TCP NetProbe sunucusu {host}:{port} üzerinde dinliyor")
+    print(f"TCP NetProbe server listening on {host}:{port}")
 
     try:
         while True:
@@ -122,16 +122,16 @@ def run_server(host: str, port: int, output_dir: str, log_dir: str, once: bool) 
     finally:
         csv_path, json_path = logger.save()
         sock.close()
-        print(f"TCP sunucu logları kaydedildi: {csv_path} ve {json_path}")
+        print(f"TCP server logs saved: {csv_path} and {json_path}")
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="NetProbe TCP dosya aktarım sunucusu")
+    parser = argparse.ArgumentParser(description="NetProbe TCP file transfer server")
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=DEFAULT_SERVER_PORT)
     parser.add_argument("--output-dir", default=RECEIVED_FILES_DIR)
     parser.add_argument("--log-dir", default=LOGS_DIR)
-    parser.add_argument("--once", action="store_true", help="Bir başarılı aktarımdan sonra çık")
+    parser.add_argument("--once", action="store_true", help="Exit after one successful transfer")
     return parser
 
 

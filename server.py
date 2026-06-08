@@ -61,6 +61,8 @@ class TransferSession:
 
 
 def should_drop(loss_rate: float) -> bool:
+    """ACK kaybı deneylerinde gönderimi atlayıp atlamayacağını döndürür."""
+
     return loss_rate > 0 and random.random() < loss_rate
 
 
@@ -117,20 +119,22 @@ def send_ack(
 
 
 def safe_received_path(output_dir: str, filename: str) -> str:
+    """İstemciden gelen dosya adını dizin kaçışına izin vermeden hedef yola çevirir."""
+
     clean_name = os.path.basename(filename) or "received_file.bin"
     return os.path.join(output_dir, clean_name)
 
 
 def reconstruct_file(session: TransferSession, output_dir: str) -> tuple[str, str, bool]:
+    """Alınan DATA parçalarını sırayla yazar ve SHA-256 bütünlüğünü doğrular."""
+
     os.makedirs(output_dir, exist_ok=True)
     output_path = safe_received_path(output_dir, session.filename)
 
-    # Sequence number sırasına göre parçalar birleştirilir.
     with open(output_path, "wb") as output_file:
         for sequence_number in range(session.total_packets):
             output_file.write(session.chunks[sequence_number])
 
-    # Aktarım sonunda SHA-256 ile dosya bütünlüğü doğrulanır.
     actual_hash = file_sha256(output_path)
     return output_path, actual_hash, actual_hash == session.expected_hash
 
@@ -143,16 +147,17 @@ def run_server(
     ack_loss_rate: float,
     once: bool,
 ) -> None:
+    """UDP sunucusunu çalıştırır ve her istemci aktarımını ayrı oturum olarak izler."""
+
     os.makedirs(output_dir, exist_ok=True)
     logger = EventLogger(log_dir, prefix="server_transfer")
-    # UDP socket kurulumu: bağlantı kurmadan datagram alır/gönderir.
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.bind((host, port))
     sessions: dict[tuple[str, int], TransferSession] = {}
     completed_fin_sequences: dict[tuple[str, int], tuple[int, int]] = {}
     shutdown_deadline: float | None = None
 
-    print(f"NetProbe sunucusu {host}:{port} üzerinde dinliyor")
+    print(f"NetProbe UDP server listening on {host}:{port}")
     logger.log(event="server_started", details=f"host={host}; port={port}; ack_loss_rate={ack_loss_rate}")
 
     try:
@@ -214,14 +219,32 @@ def run_server(
                         f"expected_size={session.expected_size}; expected_hash={session.expected_hash}"
                     ),
                 )
-                send_ack(sock, client_address, TYPE_ACK, packet.sequence_number, packet.total_packets, logger, ack_loss_rate, "START")
+                send_ack(
+                    sock,
+                    client_address,
+                    TYPE_ACK,
+                    packet.sequence_number,
+                    packet.total_packets,
+                    logger,
+                    ack_loss_rate,
+                    "START",
+                )
                 continue
 
             session = sessions.get(client_address)
             if session is None:
                 if packet.packet_type == TYPE_FIN and client_address in completed_fin_sequences:
                     fin_sequence, total_packets = completed_fin_sequences[client_address]
-                    send_ack(sock, client_address, TYPE_FIN_ACK, fin_sequence, total_packets, logger, ack_loss_rate, "FIN")
+                    send_ack(
+                        sock,
+                        client_address,
+                        TYPE_FIN_ACK,
+                        fin_sequence,
+                        total_packets,
+                        logger,
+                        ack_loss_rate,
+                        "FIN",
+                    )
                     logger.log(
                         event="duplicate_fin_reacknowledged",
                         packet_type=packet_name,
@@ -235,11 +258,13 @@ def run_server(
                     sequence_number=packet.sequence_number,
                     details="START paketinden önce DATA/FIN alındı",
                 )
-                sock.sendto(make_packet(TYPE_ERROR, packet.sequence_number, packet.total_packets, b"missing START"), client_address)
+                sock.sendto(
+                    make_packet(TYPE_ERROR, packet.sequence_number, packet.total_packets, b"missing START"),
+                    client_address,
+                )
                 continue
 
             if packet.packet_type == TYPE_DATA:
-                # Duplicate DATA paketi aynı dosya parçasını ikinci kez yazdırmaz.
                 store_status = store_chunk_if_new(session, packet.sequence_number, packet.payload)
                 if store_status == "duplicate":
                     logger.log(
@@ -257,7 +282,7 @@ def run_server(
                         event="out_of_range_packet_ignored",
                         packet_type=packet_name,
                         sequence_number=packet.sequence_number,
-                            details=f"total_packets={session.total_packets}",
+                        details=f"total_packets={session.total_packets}",
                     )
                 else:
                     logger.log(
@@ -268,9 +293,17 @@ def run_server(
                         details=f"stored_chunks={len(session.chunks)}/{session.total_packets}",
                     )
 
-                # İlk ACK kaybolmuş olabileceği için duplicate paketler tekrar ACK'lenir.
-                # Bu davranış Stop-and-Wait mekanizmasının sunucu tarafıdır.
-                send_ack(sock, client_address, TYPE_ACK, packet.sequence_number, packet.total_packets, logger, ack_loss_rate, "DATA")
+                # ACK kaybı durumunda istemci aynı DATA paketini tekrar gönderebilir.
+                send_ack(
+                    sock,
+                    client_address,
+                    TYPE_ACK,
+                    packet.sequence_number,
+                    packet.total_packets,
+                    logger,
+                    ack_loss_rate,
+                    "DATA",
+                )
                 continue
 
             if packet.packet_type == TYPE_FIN:
@@ -318,24 +351,23 @@ def run_server(
                 completed_fin_sequences[client_address] = (packet.sequence_number, packet.total_packets)
                 del sessions[client_address]
                 if once:
-                    # İlk FIN_ACK kaybolursa istemci FIN paketini yeniden gönderebilir.
-                    # Bu nedenle sunucu kısa süre açık kalır.
+                    # FIN_ACK kaybı olursa istemcinin son FIN tekrarına cevap verebilmek için kısa süre beklenir.
                     shutdown_deadline = time.time() + 2.0
                     continue
     finally:
         csv_path, json_path = logger.save()
         sock.close()
-        print(f"Sunucu logları kaydedildi: {csv_path} ve {json_path}")
+        print(f"Server logs saved: {csv_path} and {json_path}")
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="NetProbe UDP dosya aktarım sunucusu")
+    parser = argparse.ArgumentParser(description="NetProbe UDP file transfer server")
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=DEFAULT_SERVER_PORT)
     parser.add_argument("--output-dir", default=RECEIVED_FILES_DIR)
     parser.add_argument("--log-dir", default=LOGS_DIR)
     parser.add_argument("--ack-loss-rate", type=float, default=DEFAULT_LOSS_RATE)
-    parser.add_argument("--once", action="store_true", help="Bir başarılı aktarımdan sonra çık")
+    parser.add_argument("--once", action="store_true", help="Exit after one successful transfer")
     return parser
 
 

@@ -42,7 +42,7 @@ def ensure_test_file(path: str, size_bytes: int) -> None:
         return
 
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    pattern = (f"NetProbe deterministik test verisi: {os.path.basename(path)}.\n").encode("utf-8")
+    pattern = (f"NetProbe test data: {os.path.basename(path)}.\n").encode("utf-8")
     with open(path, "wb") as file_obj:
         while file_obj.tell() < size_bytes:
             remaining = size_bytes - file_obj.tell()
@@ -61,7 +61,7 @@ def ensure_standard_test_files(test_dir: str) -> dict[str, str]:
 def latest_log(log_dir: str, prefix: str, before: set[str]) -> str:
     candidates = set(glob.glob(os.path.join(log_dir, f"{prefix}_*.csv"))) - before
     if not candidates:
-        raise FileNotFoundError(f"Yeni {prefix} logu oluşturulmadı")
+        raise FileNotFoundError(f"No new {prefix} log was created")
     return max(candidates, key=os.path.getmtime)
 
 
@@ -73,17 +73,19 @@ def run_one_transfer(
     loss_rate: float,
     max_retries: int,
     log_dir: str,
-    output_dir: str,
     protocol: str = "UDP",
     delay_ms: float = DEFAULT_DELAY_MS,
 ) -> tuple[str, str]:
+    """Tek bir UDP/TCP aktarımı çalıştırır ve oluşan istemci/sunucu loglarını döndürür."""
+
     os.makedirs(log_dir, exist_ok=True)
-    os.makedirs(output_dir, exist_ok=True)
     protocol = protocol.upper()
     client_log_prefix = "client_transfer" if protocol == "UDP" else "tcp_client"
     server_log_prefix = "server_transfer" if protocol == "UDP" else "tcp_server"
     before_logs = set(glob.glob(os.path.join(log_dir, f"{client_log_prefix}_*.csv")))
     before_server_logs = set(glob.glob(os.path.join(log_dir, f"{server_log_prefix}_*.csv")))
+    process_env = os.environ.copy()
+    process_env["PYTHONIOENCODING"] = "utf-8"
 
     if protocol == "TCP":
         server_cmd = [
@@ -158,6 +160,7 @@ def run_one_transfer(
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        env=process_env,
     )
     time.sleep(0.4)
 
@@ -169,10 +172,11 @@ def run_one_transfer(
             text=True,
             timeout=120,
             check=False,
+            env=process_env,
         )
         if client_result.returncode != 0:
             raise RuntimeError(
-                "İstemci başarısız oldu\n"
+                "Client process failed\n"
                 f"STDOUT:\n{client_result.stdout}\n"
                 f"STDERR:\n{client_result.stderr}"
             )
@@ -180,7 +184,7 @@ def run_one_transfer(
         server_process.wait(timeout=10)
         if server_process.returncode not in (0, None):
             stdout, stderr = server_process.communicate(timeout=1)
-            raise RuntimeError(f"Sunucu başarısız oldu\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}")
+            raise RuntimeError(f"Server process failed\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}")
     finally:
         if server_process.poll() is None:
             server_process.terminate()
@@ -204,6 +208,19 @@ def run_experiments(
         generated_files["custom"] = file_path
 
     scenarios: list[dict[str, Any]] = []
+    for file_key in ["small", "medium", "large"]:
+        scenarios.append(
+            {
+                "scenario": "file_size",
+                "protocol": "UDP",
+                "file_path": generated_files[file_key],
+                "packet_size": 1024,
+                "timeout": 1.0,
+                "loss_rate": 0.0,
+                "delay_ms": 0.0,
+            }
+        )
+
     for packet_size in [512, 1024, 2048]:
         scenarios.append(
             {
@@ -270,7 +287,7 @@ def run_experiments(
     results: list[dict[str, Any]] = []
     current_port = port
     for index, scenario in enumerate(scenarios, start=1):
-        print(f"Deney çalışıyor {index}/{len(scenarios)}: {scenario}")
+        print(f"Running experiment {index}/{len(scenarios)}: {scenario}")
         client_log, server_log = run_one_transfer(
             file_path=str(scenario["file_path"]),
             port=current_port,
@@ -279,7 +296,6 @@ def run_experiments(
             loss_rate=float(scenario["loss_rate"]),
             max_retries=max_retries,
             log_dir=log_dir,
-            output_dir=output_dir,
             protocol=str(scenario.get("protocol", "UDP")),
             delay_ms=float(scenario.get("delay_ms", DEFAULT_DELAY_MS)),
         )
@@ -341,11 +357,11 @@ def run_experiments(
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="NetProbe performans deneylerini çalıştırır")
+    parser = argparse.ArgumentParser(description="Run repeatable NetProbe performance experiments")
     parser.add_argument(
         "--file",
         default="",
-        help="Deneylerde üretilecek/kullanılacak isteğe bağlı dosya; varsayılan küçük ve orta dosyalar kullanılır",
+        help="Optional experiment file; default small and medium test files are generated automatically",
     )
     parser.add_argument("--port", type=int, default=6100)
     parser.add_argument("--max-retries", type=int, default=DEFAULT_MAX_RETRIES)
@@ -363,10 +379,10 @@ def main() -> None:
         log_dir=args.log_dir,
         output_dir=args.output_dir,
     )
-    print(f"Deney sonuçları kaydedildi: {results_csv}")
-    print("Grafikler oluşturuldu:")
+    print(f"Experiment results saved: {results_csv}")
+    print("Graphs generated:")
     for graph_path in graph_paths:
-        print(f"  {graph_path}")
+        print(f"- {os.path.relpath(graph_path, BASE_DIR).replace(os.sep, '/')}")
 
 
 if __name__ == "__main__":

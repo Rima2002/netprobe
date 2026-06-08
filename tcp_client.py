@@ -23,7 +23,7 @@ def send_exact(sock: socket.socket, data: bytes) -> None:
     while total_sent < len(data):
         sent = sock.send(data[total_sent:])
         if sent == 0:
-            raise ConnectionError("Socket bağlantısı koptu")
+            raise ConnectionError("Socket connection was closed")
         total_sent += sent
 
 
@@ -32,7 +32,7 @@ def recv_exact(sock: socket.socket, size: int) -> bytes:
     while len(buffer) < size:
         chunk = sock.recv(size - len(buffer))
         if not chunk:
-            raise ConnectionError("Veri alınırken bağlantı kapandı")
+            raise ConnectionError("Connection closed while receiving data")
         buffer.extend(chunk)
     return bytes(buffer)
 
@@ -113,14 +113,14 @@ def send_file(server_ip: str, server_port: int, file_path: str, packet_size: int
         )
         csv_path, json_path = logger.save()
         sock.close()
-        print(f"TCP logları kaydedildi: {csv_path} ve {json_path}")
+        print(f"TCP logs saved: {csv_path} and {json_path}")
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="NetProbe TCP dosya aktarım istemcisi")
+    parser = argparse.ArgumentParser(description="NetProbe TCP file transfer client")
     parser.add_argument("--server-ip", default=DEFAULT_SERVER_IP)
     parser.add_argument("--server-port", type=int, default=DEFAULT_SERVER_PORT)
-    parser.add_argument("--file", required=True, help="Gönderilecek dosyanın yolu")
+    parser.add_argument("--file", required=True, help="Path of the file to send")
     parser.add_argument("--packet-size", type=int, default=DEFAULT_PACKET_SIZE)
     parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT)
     parser.add_argument("--log-dir", default=LOGS_DIR)
@@ -138,9 +138,9 @@ def main() -> None:
         log_dir=args.log_dir,
     )
     if success:
-        print("TCP aktarımı başarıyla tamamlandı.")
+        print("TCP transfer completed successfully.")
     else:
-        raise SystemExit("TCP aktarımı başarısız oldu.")
+        raise SystemExit("TCP transfer failed.")
 
 
 if __name__ == "__main__":
