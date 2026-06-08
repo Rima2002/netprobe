@@ -1,4 +1,4 @@
-# NetProbe: UDP Reliable File Transfer
+# NetProbe: UDP Tabanlı Güvenilir Dosya Aktarımı
 
 NetProbe, UDP uzerinde calisan guvenilir dosya aktarimi, trafik loglama ve ag performans analizi projesidir. UDP kendi basina teslim garantisi vermedigi icin proje; sequence number, ACK, timeout, retransmission, duplicate packet kontrolu ve SHA-256 butunluk dogrulamasini uygulama katmaninda elle uygular.
 
